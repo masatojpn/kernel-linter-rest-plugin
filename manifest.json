@@ -1,0 +1,19 @@
+{
+  "name": "Kernel Linter REST",
+  "id": "kernel-linter-rest",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "src/ui.html",
+  "editorType": [
+    "figma"
+  ],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": [
+      "https://kernel-linter-rest-server.vercel.app"
+    ],
+    "devAllowedDomains": [
+      "http://localhost:3000"
+    ]
+  }
+}

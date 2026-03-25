@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kernel Linter REST</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        font:
+          12px/1.5 Inter,
+          system-ui,
+          sans-serif;
+        color: var(--figma-color-text);
+        background: var(--figma-color-bg);
+      }
+
+      .wrap {
+        display: grid;
+        gap: 12px;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .label {
+        font-weight: 600;
+      }
+
+      .input {
+        width: 100%;
+        min-height: 32px;
+        padding: 8px 10px;
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        outline: none;
+        background: var(--figma-color-bg-secondary);
+        color: var(--figma-color-text);
+      }
+
+      .button {
+        appearance: none;
+        border: 0;
+        border-radius: 6px;
+        min-height: 36px;
+        padding: 0 12px;
+        font-weight: 600;
+        cursor: pointer;
+        color: white;
+        background: var(--figma-color-bg-brand);
+      }
+
+      .button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      .panel {
+        border: 1px solid var(--figma-color-border);
+        border-radius: 8px;
+        padding: 10px;
+        background: var(--figma-color-bg-secondary);
+      }
+
+      .status {
+        white-space: pre-wrap;
+      }
+
+      .error {
+        color: var(--figma-color-text-danger);
+      }
+
+      .result {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="field">
+        <label class="label" for="serverBaseUrl">Server Base URL</label>
+        <input
+          id="serverBaseUrl"
+          class="input"
+          type="text"
+          placeholder="https://kernel-linter-rest-server.vercel.app"
+        />
+      </div>
+
+      <div class="field">
+        <button id="connectButton" class="button" type="button">Connect</button>
+      </div>
+
+      <div class="panel">
+        <div id="connectionStatus" class="status">Not connected</div>
+      </div>
+
+      <button id="runButton" class="button" type="button">Run Lint</button>
+
+      <div class="panel">
+        <div id="status" class="status">待機中</div>
+      </div>
+
+      <div class="panel">
+        <div id="result" class="result">結果なし</div>
+      </div>
+    </div>
+
+    <script>
+      const serverBaseUrlEl = document.getElementById("serverBaseUrl");
+      const runButtonEl = document.getElementById("runButton");
+      const connectButtonEl = document.getElementById("connectButton");
+      const connectionStatusEl = document.getElementById("connectionStatus");
+      const statusEl = document.getElementById("status");
+      const resultEl = document.getElementById("result");
+
+      const POLL_INTERVAL_MS = 1500;
+      const POLL_TIMEOUT_MS = 60000;
+
+      let connectPollTimerId = 0;
+      let connectDeadlineAt = 0;
+      let activeConnectRequestId = "";
+      let isConnecting = false;
+
+      function setStatus(message, isError) {
+        statusEl.textContent = message;
+        statusEl.classList.toggle("error", !!isError);
+      }
+
+      function setRunning(isRunning) {
+        runButtonEl.disabled = !!isRunning;
+      }
+
+      function setConnecting(connecting) {
+        isConnecting = !!connecting;
+        connectButtonEl.disabled = !!connecting;
+      }
+
+      function normalizeBaseUrl(value) {
+        return String(value).trim().replace(/\/+$/, "");
+      }
+
+      function sendToPlugin(message) {
+        console.log("[ui -> plugin]", message);
+
+        parent.postMessage(
+          {
+            pluginMessage: message,
+          },
+          "*",
+        );
+      }
+
+      function createRequestId() {
+        const randomPart = Math.random().toString(36).slice(2);
+        const timePart = String(Date.now());
+        return "connect-" + timePart + "-" + randomPart;
+      }
+
+      function clearConnectPolling() {
+        if (connectPollTimerId) {
+          clearTimeout(connectPollTimerId);
+          connectPollTimerId = 0;
+        }
+      }
+
+      function finishConnectWithError(message) {
+        clearConnectPolling();
+        setConnecting(false);
+        setStatus(message, true);
+      }
+
+      function finishConnectWaiting(message) {
+        clearConnectPolling();
+        setConnecting(false);
+        setStatus(message, false);
+      }
+
+      async function pollConnectResult(baseUrl, requestId) {
+        if (!isConnecting) {
+          return;
+        }
+
+        if (requestId !== activeConnectRequestId) {
+          return;
+        }
+
+        if (Date.now() >= connectDeadlineAt) {
+          finishConnectWithError(
+            "接続がタイムアウトしました。もう一度 Connect を押してください。",
+          );
+          return;
+        }
+
+        const pollUrl =
+          baseUrl + "/api/auth/poll?requestId=" + encodeURIComponent(requestId);
+
+        console.log("[ui] polling", {
+          requestId: requestId,
+          pollUrl: pollUrl,
+        });
+
+        try {
+          const response = await fetch(pollUrl, {
+            method: "GET",
+            cache: "no-store",
+          });
+
+          const data = await response.json();
+
+          console.log("[ui] poll result", data);
+
+          if (!response.ok) {
+            finishConnectWithError("接続確認に失敗しました。");
+            return;
+          }
+
+          if (data.pending) {
+            setStatus("OAuth 完了待ちです...", false);
+
+            connectPollTimerId = window.setTimeout(function () {
+              pollConnectResult(baseUrl, requestId);
+            }, POLL_INTERVAL_MS);
+
+            return;
+          }
+
+          if (!data.sessionToken) {
+            finishConnectWithError("sessionToken を取得できませんでした。");
+            return;
+          }
+
+          sendToPlugin({
+            type: "save-session-token",
+            serverBaseUrl: baseUrl,
+            sessionToken: data.sessionToken,
+          });
+
+          finishConnectWaiting("OAuth 完了。sessionToken を保存しています...");
+        } catch (error) {
+          console.log("[ui] poll error", error);
+
+          connectPollTimerId = window.setTimeout(function () {
+            pollConnectResult(baseUrl, requestId);
+          }, POLL_INTERVAL_MS);
+        }
+      }
+
+      runButtonEl.addEventListener("click", () => {
+        setRunning(true);
+        setStatus("lint を実行しています...", false);
+
+        sendToPlugin({
+          type: "run-lint",
+          serverBaseUrl: serverBaseUrlEl.value,
+        });
+      });
+
+      connectButtonEl.addEventListener("click", () => {
+        const baseUrl = normalizeBaseUrl(serverBaseUrlEl.value);
+
+        console.log("[ui] connect click", {
+          rawBaseUrl: serverBaseUrlEl.value,
+          normalizedBaseUrl: baseUrl,
+        });
+
+        if (!baseUrl) {
+          setStatus("Server Base URL を入力してください。", true);
+          return;
+        }
+
+        if (isConnecting) {
+          setStatus("接続処理中です。少し待ってください。", false);
+          return;
+        }
+
+        const requestId = createRequestId();
+        const authUrl =
+          baseUrl +
+          "/api/auth/start?requestId=" +
+          encodeURIComponent(requestId);
+
+        activeConnectRequestId = requestId;
+        connectDeadlineAt = Date.now() + POLL_TIMEOUT_MS;
+
+        clearConnectPolling();
+        setConnecting(true);
+
+        console.log("[ui] opening auth url", {
+          authUrl: authUrl,
+          requestId: requestId,
+        });
+
+        window.open(authUrl, "_blank", "width=520,height=720");
+        setStatus(
+          "ブラウザで OAuth を開始しました。完了を待っています...",
+          false,
+        );
+
+        pollConnectResult(baseUrl, requestId);
+      });
+
+      window.onmessage = (event) => {
+        console.log("[plugin -> ui raw]", event.data);
+
+        const msg = event.data.pluginMessage;
+        if (!msg) return;
+
+        console.log("[plugin -> ui]", msg);
+
+        if (msg.type === "init") {
+          console.log("[ui] init received", msg.config);
+          serverBaseUrlEl.value = msg.config.serverBaseUrl || "";
+          return;
+        }
+
+        if (msg.type === "connection-status") {
+          console.log("[ui] connection-status", msg.connected);
+          connectionStatusEl.textContent = msg.connected
+            ? "Connected"
+            : "Not connected";
+
+          if (msg.connected) {
+            clearConnectPolling();
+            setConnecting(false);
+            setStatus("接続済みです。", false);
+          }
+
+          return;
+        }
+
+        if (msg.type === "status") {
+          console.log("[ui] status", msg.message);
+          setStatus(msg.message, false);
+          return;
+        }
+
+        if (msg.type === "result") {
+          console.log("[ui] result", msg);
+          setRunning(false);
+          resultEl.textContent =
+            "current page instances: " +
+            msg.totalInstances +
+            "\n" +
+            "invalid: " +
+            msg.invalidCount +
+            "\n" +
+            "markers: " +
+            msg.markerCount;
+          return;
+        }
+
+        if (msg.type === "error") {
+          console.log("[ui] error", msg.message);
+          setRunning(false);
+          setConnecting(false);
+          clearConnectPolling();
+          setStatus(msg.message, true);
+          return;
+        }
+      };
+
+      sendToPlugin({ type: "ui-ready" });
+    </script>
+  </body>
+</html>
