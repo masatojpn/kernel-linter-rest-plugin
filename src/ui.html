@@ -83,6 +83,25 @@
       .result {
         white-space: pre-wrap;
       }
+
+      .source-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .source-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .source-item input[type="checkbox"] {
+        margin: 0;
+      }
+
+      .source-item-label {
+        line-height: 1.4;
+      }
     </style>
   </head>
   <body>
@@ -108,6 +127,29 @@
       <button id="runButton" class="button" type="button">Run Lint</button>
 
       <div class="panel">
+        <div class="label">Global Sources</div>
+        <div id="globalSources" class="result">なし</div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Project Sources</div>
+        <div id="projectSources" class="result">なし</div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Global Sourceを選択</div>
+        <div id="globalSourceCandidates" class="result">候補なし</div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Project Sourceを選択</div>
+        <div id="projectSourceCandidates" class="result">候補なし</div>
+      </div>
+
+      <button id="saveSourcesButton" class="button" type="button">
+        Save Sources
+      </button>
+      <div class="panel">
         <div id="status" class="status">待機中</div>
       </div>
 
@@ -117,12 +159,21 @@
     </div>
 
     <script>
+      const globalSourcesEl = document.getElementById("globalSources");
+      const projectSourcesEl = document.getElementById("projectSources");
+      const globalSourceCandidatesEl = document.getElementById(
+        "globalSourceCandidates",
+      );
+      const projectSourceCandidatesEl = document.getElementById(
+        "projectSourceCandidates",
+      );
       const serverBaseUrlEl = document.getElementById("serverBaseUrl");
       const runButtonEl = document.getElementById("runButton");
       const connectButtonEl = document.getElementById("connectButton");
       const connectionStatusEl = document.getElementById("connectionStatus");
       const statusEl = document.getElementById("status");
       const resultEl = document.getElementById("result");
+      const saveSourcesButtonEl = document.getElementById("saveSourcesButton");
 
       const POLL_INTERVAL_MS = 1500;
       const POLL_TIMEOUT_MS = 60000;
@@ -131,10 +182,187 @@
       let connectDeadlineAt = 0;
       let activeConnectRequestId = "";
       let isConnecting = false;
+      let currentCandidates = [];
 
       function setStatus(message, isError) {
         statusEl.textContent = message;
         statusEl.classList.toggle("error", !!isError);
+      }
+
+      function formatSources(sources) {
+        if (!Array.isArray(sources) || sources.length === 0) {
+          return "なし";
+        }
+
+        return sources
+          .map(function (source, index) {
+            var fileKey =
+              source && typeof source.fileKey === "string"
+                ? source.fileKey
+                : "";
+
+            var pageName =
+              source && typeof source.pageName === "string"
+                ? source.pageName
+                : "";
+
+            return String(index + 1) + ". " + fileKey + " / " + pageName;
+          })
+          .join("\n");
+      }
+
+      function collectCheckedSources(groupName) {
+        var checkedEls = document.querySelectorAll(
+          'input[name="' + groupName + '"]:checked',
+        );
+
+        var result = [];
+
+        for (var i = 0; i < checkedEls.length; i += 1) {
+          var el = checkedEls[i];
+          var fileKey = el.dataset.fileKey;
+
+          if (!fileKey) {
+            continue;
+          }
+
+          result.push({
+            fileKey: fileKey,
+            pageName: "__allowedComponentList",
+          });
+        }
+
+        return result;
+      }
+
+      function updateRunLintAvailability(config) {
+        var globalSources =
+          config && Array.isArray(config.globalSources)
+            ? config.globalSources
+            : [];
+
+        var projectSources =
+          config && Array.isArray(config.projectSources)
+            ? config.projectSources
+            : [];
+
+        var totalSourceCount = globalSources.length + projectSources.length;
+
+        runButtonEl.disabled = totalSourceCount === 0;
+      }
+
+      function renderSources(config) {
+        var globalSources =
+          config && Array.isArray(config.globalSources)
+            ? config.globalSources
+            : [];
+
+        var projectSources =
+          config && Array.isArray(config.projectSources)
+            ? config.projectSources
+            : [];
+
+        globalSourcesEl.textContent = formatSources(globalSources);
+        projectSourcesEl.textContent = formatSources(projectSources);
+      }
+
+      function isSourceChecked(sources, candidate) {
+        if (!Array.isArray(sources)) {
+          return false;
+        }
+
+        for (var i = 0; i < sources.length; i += 1) {
+          var source = sources[i];
+
+          if (!source || typeof source !== "object") {
+            continue;
+          }
+
+          if (
+            source.fileKey === candidate.fileKey &&
+            source.pageName === "__allowedComponentList"
+          ) {
+            return true;
+          }
+        }
+
+        return false;
+      }
+
+      function createCandidateCheckbox(candidate, checked, groupName) {
+        var wrapper = document.createElement("label");
+        wrapper.className = "source-item";
+
+        var checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.name = groupName;
+        checkbox.value = candidate.fileKey;
+        checkbox.checked = checked;
+        checkbox.dataset.fileKey = candidate.fileKey;
+        checkbox.dataset.label = candidate.label;
+
+        var text = document.createElement("span");
+        text.className = "source-item-label";
+        text.textContent = candidate.label;
+
+        wrapper.appendChild(checkbox);
+        wrapper.appendChild(text);
+
+        return wrapper;
+      }
+
+      function renderCandidateList(
+        container,
+        candidates,
+        selectedSources,
+        groupName,
+      ) {
+        container.innerHTML = "";
+
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+          container.textContent = "候補なし";
+          return;
+        }
+
+        var list = document.createElement("div");
+        list.className = "source-list";
+
+        for (var i = 0; i < candidates.length; i += 1) {
+          var candidate = candidates[i];
+          var checked = isSourceChecked(selectedSources, candidate);
+
+          list.appendChild(
+            createCandidateCheckbox(candidate, checked, groupName),
+          );
+        }
+
+        container.appendChild(list);
+      }
+
+      function renderSourceSelectors(config, candidates) {
+        var globalSources =
+          config && Array.isArray(config.globalSources)
+            ? config.globalSources
+            : [];
+
+        var projectSources =
+          config && Array.isArray(config.projectSources)
+            ? config.projectSources
+            : [];
+
+        renderCandidateList(
+          globalSourceCandidatesEl,
+          candidates,
+          globalSources,
+          "global-source-candidate",
+        );
+
+        renderCandidateList(
+          projectSourceCandidatesEl,
+          candidates,
+          projectSources,
+          "project-source-candidate",
+        );
       }
 
       function setRunning(isRunning) {
@@ -256,6 +484,39 @@
         }
       }
 
+      saveSourcesButtonEl.addEventListener("click", function () {
+        var globalSources = collectCheckedSources("global-source-candidate");
+        var projectSources = collectCheckedSources("project-source-candidate");
+
+        console.log("[ui] save sources", {
+          globalSources: globalSources,
+          projectSources: projectSources,
+        });
+
+        sendToPlugin({
+          type: "save-sources",
+          globalSources: globalSources,
+          projectSources: projectSources,
+        });
+
+        setStatus("Sources を保存しています...", false);
+      });
+
+      {# document.addEventListener("change", function (event) {
+        var target = event.target;
+
+        if (!(target instanceof HTMLInputElement)) {
+          return;
+        }
+
+        if (
+          target.name === "global-source-candidate" ||
+          target.name === "project-source-candidate"
+        ) {
+          updateRunLintAvailability();
+        }
+      }); #}
+
       runButtonEl.addEventListener("click", () => {
         setRunning(true);
         setStatus("lint を実行しています...", false);
@@ -320,7 +581,16 @@
 
         if (msg.type === "init") {
           console.log("[ui] init received", msg.config);
+          console.log("[ui] init candidates", msg.candidates);
+
           serverBaseUrlEl.value = msg.config.serverBaseUrl || "";
+          currentCandidates = Array.isArray(msg.candidates)
+            ? msg.candidates
+            : [];
+
+          renderSources(msg.config);
+          renderSourceSelectors(msg.config, currentCandidates);
+          updateRunLintAvailability(msg.config);
           return;
         }
 

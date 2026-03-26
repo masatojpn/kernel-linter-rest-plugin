@@ -8,6 +8,9 @@
     "figma"
   ],
   "documentAccess": "dynamic-page",
+  "permissions": [
+    "teamlibrary"
+  ],
   "networkAccess": {
     "allowedDomains": [
       "https://kernel-linter-rest-server.vercel.app"

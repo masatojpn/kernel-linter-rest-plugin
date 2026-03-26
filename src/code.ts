@@ -1,6 +1,162 @@
+const CLIENT_STORAGE_CONFIG_KEY = "kernel-rest-config";
+const PROJECT_SOURCES_PLUGIN_DATA_KEY = "kernel-project-sources";
+
+
+type IndexLibraryCandidate = {
+  slug: string;
+  label: string;
+  fileKey: string;
+};
+
+function extractSlugAndField(variableName: string): {
+  slug: string;
+  field: string;
+} | null {
+  const parts = variableName.split("/");
+
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  if (parts[0] !== "ds") {
+    return null;
+  }
+
+  if (!parts[1] || !parts[2]) {
+    return null;
+  }
+
+  return {
+    slug: parts[1],
+    field: parts[2]
+  };
+}
+
+async function getImportedStringVariableValueByKey(
+  variableKey: string
+): Promise<string> {
+  const importedVariable =
+    await figma.variables.importVariableByKeyAsync(variableKey);
+
+  if (!importedVariable) {
+    return "";
+  }
+
+  if (importedVariable.resolvedType !== "STRING") {
+    return "";
+  }
+
+  const collection = await figma.variables.getVariableCollectionByIdAsync(
+    importedVariable.variableCollectionId
+  );
+
+  if (!collection) {
+    return "";
+  }
+
+  const defaultModeId = collection.defaultModeId;
+  const rawValue = importedVariable.valuesByMode[defaultModeId];
+
+  if (typeof rawValue !== "string") {
+    return "";
+  }
+
+  return rawValue.trim();
+}
+
+async function getKernelIndexCandidates(): Promise<IndexLibraryCandidate[]> {
+  const collections =
+    await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+
+  console.log("[kernel-index] available collections", collections);
+
+  const targetCollections = collections.filter(function (collection) {
+    return collection.name === "Kernel Index";
+  });
+
+  console.log("[kernel-index] target collections", targetCollections);
+
+  const grouped = new Map<
+    string,
+    {
+      label: string;
+      fileKey: string;
+    }
+  >();
+
+  for (const collection of targetCollections) {
+    const variables =
+      await figma.teamLibrary.getVariablesInLibraryCollectionAsync(
+        collection.key
+      );
+
+    console.log("[kernel-index] variables", {
+      collectionName: collection.name,
+      libraryName: collection.libraryName,
+      variables: variables
+    });
+
+    for (const variable of variables) {
+      const parsed = extractSlugAndField(variable.name);
+
+      if (!parsed) {
+        continue;
+      }
+
+      if (variable.resolvedType !== "STRING") {
+        continue;
+      }
+
+      const value = await getImportedStringVariableValueByKey(variable.key);
+
+      if (!value) {
+        continue;
+      }
+
+      const current = grouped.get(parsed.slug) || {
+        label: "",
+        fileKey: ""
+      };
+
+      if (parsed.field === "label") {
+        current.label = value;
+      }
+
+      if (parsed.field === "fileKey") {
+        current.fileKey = value;
+      }
+
+      grouped.set(parsed.slug, current);
+    }
+  }
+
+  const result: IndexLibraryCandidate[] = [];
+
+  for (const entry of grouped.entries()) {
+    const slug = entry[0];
+    const value = entry[1];
+
+    if (!value.label || !value.fileKey) {
+      continue;
+    }
+
+    result.push({
+      slug: slug,
+      label: value.label,
+      fileKey: value.fileKey
+    });
+  }
+
+  console.log("[kernel-index] candidates", result);
+
+  return result;
+}
+
 type StoredConfig = {
   serverBaseUrl: string;
   sessionToken: string;
+  globalSources: AllowedSource[];
+  projectSources: AllowedSource[];
 };
 
 type AllowedSource = {
@@ -18,12 +174,18 @@ type UIToCodeMessage =
   | {
       type: "run-lint";
       serverBaseUrl: string;
-    };
+    }
+  | {
+    type: "save-sources";
+    globalSources: AllowedSource[];
+    projectSources: AllowedSource[];
+  };
 
 type CodeToUIMessage =
   | {
       type: "init";
       config: StoredConfig;
+      candidates: IndexLibraryCandidate[];
     }
   | {
       type: "connection-status";
@@ -55,6 +217,16 @@ const MARKER_NAME = "__kernel-linter-marker";
 const UI_WIDTH = 360;
 const UI_HEIGHT = 320;
 
+// (async function () {
+//   try {
+//     const candidates = await getKernelIndexCandidates();
+
+//     console.log("[kernel-index] candidates", candidates);
+//   } catch (error) {
+//     console.log("[kernel-index] failed", error);
+//   }
+// })();
+
 figma.showUI(__html__, {
   width: UI_WIDTH,
   height: UI_HEIGHT,
@@ -65,6 +237,7 @@ void boot();
 
 async function boot(): Promise<void> {
   var config = await loadConfig();
+  var candidates = await getKernelIndexCandidates();
 
   console.log("[code] boot loadConfig", {
     serverBaseUrl: config.serverBaseUrl,
@@ -74,7 +247,8 @@ async function boot(): Promise<void> {
 
   postToUI({
     type: "init",
-    config: config
+    config: config,
+    candidates: candidates
   });
 
   postToUI({
@@ -88,10 +262,12 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
   try {
     if (msg.type === "ui-ready") {
       var initConfig = await loadConfig();
+      var initCandidates = await getKernelIndexCandidates();
 
       postToUI({
         type: "init",
-        config: initConfig
+        config: initConfig,
+        candidates: initCandidates
       });
 
       postToUI({
@@ -102,63 +278,110 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
       return;
     }
 
+    if (msg.type === "save-sources") {
+      var currentConfigForSources = await loadConfig();
+
+      await saveConfig({
+        serverBaseUrl: currentConfigForSources.serverBaseUrl,
+        sessionToken: currentConfigForSources.sessionToken,
+        globalSources: normalizeAllowedSources(msg.globalSources),
+        projectSources: normalizeAllowedSources(msg.projectSources)
+      });
+
+      var savedConfigForSources = await loadConfig();
+      var savedCandidatesForSources = await getKernelIndexCandidates();
+
+      console.log("[code] sources saved", {
+        globalSources: savedConfigForSources.globalSources,
+        projectSources: savedConfigForSources.projectSources
+      });
+
+      postToUI({
+        type: "init",
+        config: savedConfigForSources,
+        candidates: savedCandidatesForSources
+      });
+
+      postToUI({
+        type: "status",
+        message: "Sources を保存しました。"
+      });
+
+      return;
+    }
+
     if (msg.type === "save-session-token") {
-  console.log("[code] save-session-token start", {
-    serverBaseUrl: msg.serverBaseUrl,
-    hasSessionToken: !!msg.sessionToken,
-    sessionTokenLength: msg.sessionToken ? msg.sessionToken.length : 0
-  });
+      console.log("[code] save-session-token start", {
+        serverBaseUrl: msg.serverBaseUrl,
+        hasSessionToken: !!msg.sessionToken,
+        sessionTokenLength: msg.sessionToken ? msg.sessionToken.length : 0
+      });
 
-  var currentConfigForSave = await loadConfig();
-  console.log("[code] current config before save", {
-    serverBaseUrl: currentConfigForSave.serverBaseUrl,
-    hasSessionToken: !!currentConfigForSave.sessionToken
-  });
+      var currentConfigForSave = await loadConfig();
+      console.log("[code] current config before save", {
+        serverBaseUrl: currentConfigForSave.serverBaseUrl,
+        hasSessionToken: !!currentConfigForSave.sessionToken
+      });
 
-  await saveConfig({
-    serverBaseUrl: currentConfigForSave.serverBaseUrl,
-    sessionToken: msg.sessionToken
-  });
+      await saveConfig({
+        serverBaseUrl: currentConfigForSave.serverBaseUrl,
+        sessionToken: msg.sessionToken,
+        globalSources: currentConfigForSave.globalSources,
+        projectSources: currentConfigForSave.projectSources
+      });
 
-  var savedConfig = await loadConfig();
-  console.log("[code] config after save", {
-    serverBaseUrl: savedConfig.serverBaseUrl,
-    hasSessionToken: !!savedConfig.sessionToken,
-    sessionTokenLength: savedConfig.sessionToken ? savedConfig.sessionToken.length : 0
-  });
+      var savedConfig = await loadConfig();
+      var savedCandidates = await getKernelIndexCandidates();
+      console.log("[code] config after save", {
+        serverBaseUrl: savedConfig.serverBaseUrl,
+        hasSessionToken: !!savedConfig.sessionToken,
+        sessionTokenLength: savedConfig.sessionToken ? savedConfig.sessionToken.length : 0
+      });
 
-  postToUI({
-    type: "init",
-    config: savedConfig
-  });
+      postToUI({
+        type: "init",
+        config: savedConfig,
+        candidates: savedCandidates
+      });
 
-  postToUI({
-    type: "connection-status",
-    connected: !!savedConfig.sessionToken
-  });
+      postToUI({
+        type: "connection-status",
+        connected: !!savedConfig.sessionToken
+      });
 
-  postToUI({
-    type: "status",
-    message:
-      "接続済みです。token保存: " +
-      (savedConfig.sessionToken ? "OK" : "NG")
-  });
+      postToUI({
+        type: "status",
+        message:
+          "接続済みです。token保存: " +
+          (savedConfig.sessionToken ? "OK" : "NG")
+      });
 
-  return;
-}
+      return;
+    }
 
     if (msg.type === "run-lint") {
       var currentConfig = await loadConfig();
       var serverBaseUrl = normalizeBaseUrl(msg.serverBaseUrl);
       var sessionToken = currentConfig.sessionToken;
+      var sources = mergeSources(
+        currentConfig.globalSources,
+        currentConfig.projectSources
+      );
 
       console.log("[code] run-lint start", {
-    inputServerBaseUrl: msg.serverBaseUrl,
-    normalizedServerBaseUrl: serverBaseUrl,
-    savedServerBaseUrl: currentConfig.serverBaseUrl,
-    hasSessionToken: !!sessionToken,
-    sessionTokenLength: sessionToken ? sessionToken.length : 0
-  });
+        inputServerBaseUrl: msg.serverBaseUrl,
+        normalizedServerBaseUrl: serverBaseUrl,
+        savedServerBaseUrl: currentConfig.serverBaseUrl,
+        hasSessionToken: !!sessionToken,
+        sessionTokenLength: sessionToken ? sessionToken.length : 0
+      });
+
+      console.log("[code] run-lint sources", {
+        globalSourceCount: currentConfig.globalSources.length,
+        projectSourceCount: currentConfig.projectSources.length,
+        mergedSourceCount: sources.length,
+        sources: sources
+      });
 
       if (!serverBaseUrl) {
         throw new Error("Server Base URL を入力してください。");
@@ -168,9 +391,13 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
         throw new Error("未接続です。Connect を実行してください。");
       }
 
+      const currentConfigForUpdate = await loadConfig();
+
       await saveConfig({
         serverBaseUrl: serverBaseUrl,
-        sessionToken: sessionToken
+        sessionToken: sessionToken,
+        globalSources: currentConfigForUpdate.globalSources,
+        projectSources: currentConfigForUpdate.projectSources
       });
 
       postToUI({
@@ -178,12 +405,20 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
         message: "allowed components を取得しています..."
       });
 
-      var sources: AllowedSource[] = [
-        {
-          fileKey: "eV4Tr84CWhKWPzpciqMUg4",
-          pageName: "__allowedComponentList"
-        }
-      ];
+      // var sources: AllowedSource[] = [
+      //   {
+      //     fileKey: "eV4Tr84CWhKWPzpciqMUg4",
+      //     pageName: "__allowedComponentList"
+      //   }
+      // ];
+
+      if (sources.length === 0) {
+        figma.ui.postMessage({
+          type: "error",
+          message: "参照先ライブラリが未設定です。"
+        });
+        return;
+      }
 
       var allowedKeys = await fetchAllowedKeys(
         serverBaseUrl,
@@ -233,7 +468,9 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
 
       await saveConfig({
         serverBaseUrl: currentConfigForClear.serverBaseUrl,
-        sessionToken: ""
+        sessionToken: "",
+        globalSources: currentConfigForClear.globalSources,
+        projectSources: currentConfigForClear.projectSources
       });
 
       postToUI({
@@ -256,36 +493,121 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
   }
 };
 
+function mergeSources(
+  globalSources: AllowedSource[],
+  projectSources: AllowedSource[]
+): AllowedSource[] {
+  const merged = new Map<string, AllowedSource>();
+
+  for (const source of globalSources) {
+    const key = source.fileKey + "::" + source.pageName;
+    merged.set(key, source);
+  }
+
+  for (const source of projectSources) {
+    const key = source.fileKey + "::" + source.pageName;
+    merged.set(key, source);
+  }
+
+  return Array.from(merged.values());
+}
+
 function postToUI(message: CodeToUIMessage): void {
   figma.ui.postMessage(message);
 }
 
-async function loadConfig(): Promise<StoredConfig> {
-  var saved = await figma.clientStorage.getAsync(STORAGE_KEY);
-
-  var serverBaseUrl = "https://kernel-linter-rest-server.vercel.app";
-  var sessionToken = "";
-
-  if (saved && typeof saved === "object") {
-    if (typeof (saved as any).serverBaseUrl === "string") {
-      if ((saved as any).serverBaseUrl.trim() !== "") {
-        serverBaseUrl = (saved as any).serverBaseUrl;
-      }
-    }
-
-    if (typeof (saved as any).sessionToken === "string") {
-      sessionToken = (saved as any).sessionToken;
-    }
+function normalizeAllowedSources(input: unknown): AllowedSource[] {
+  if (!Array.isArray(input)) {
+    return [];
   }
+
+  const result: AllowedSource[] = [];
+
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const fileKey =
+      "fileKey" in item && typeof item.fileKey === "string"
+        ? item.fileKey.trim()
+        : "";
+
+    const pageName =
+      "pageName" in item && typeof item.pageName === "string"
+        ? item.pageName.trim()
+        : "";
+
+    if (!fileKey || !pageName) {
+      continue;
+    }
+
+    result.push({
+      fileKey: fileKey,
+      pageName: pageName
+    });
+  }
+
+  return result;
+}
+
+function loadProjectSources(): AllowedSource[] {
+  const raw = figma.root.getPluginData(PROJECT_SOURCES_PLUGIN_DATA_KEY);
+
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeAllowedSources(parsed);
+  } catch (error) {
+    console.log("[plugin] failed to parse projectSources", error);
+    return [];
+  }
+}
+
+function saveProjectSources(sources: AllowedSource[]): void {
+  figma.root.setPluginData(
+    PROJECT_SOURCES_PLUGIN_DATA_KEY,
+    JSON.stringify(sources)
+  );
+}
+
+async function loadConfig(): Promise<StoredConfig> {
+  const raw = await figma.clientStorage.getAsync(CLIENT_STORAGE_CONFIG_KEY);
+
+  let parsed: Partial<StoredConfig> = {};
+
+  if (raw && typeof raw === "object") {
+    parsed = raw as Partial<StoredConfig>;
+  }
+
+  const serverBaseUrl =
+    typeof parsed.serverBaseUrl === "string" ? parsed.serverBaseUrl : "";
+
+  const sessionToken =
+    typeof parsed.sessionToken === "string" ? parsed.sessionToken : "";
+
+  const globalSources = normalizeAllowedSources(parsed.globalSources);
+  const projectSources = loadProjectSources();
 
   return {
     serverBaseUrl: serverBaseUrl,
-    sessionToken: sessionToken
+    sessionToken: sessionToken,
+    globalSources: globalSources,
+    projectSources: projectSources
   };
 }
 
 async function saveConfig(config: StoredConfig): Promise<void> {
-  await figma.clientStorage.setAsync(STORAGE_KEY, config);
+  await figma.clientStorage.setAsync(CLIENT_STORAGE_CONFIG_KEY, {
+    serverBaseUrl: config.serverBaseUrl,
+    sessionToken: config.sessionToken,
+    globalSources: config.globalSources
+  });
+
+  saveProjectSources(config.projectSources);
 }
 
 function normalizeBaseUrl(value: string): string {
