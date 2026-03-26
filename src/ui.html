@@ -159,6 +159,8 @@
     </div>
 
     <script>
+      const FIXED_SERVER_BASE_URL =
+        "https://kernel-linter-rest-server.vercel.app";
       const globalSourcesEl = document.getElementById("globalSources");
       const projectSourcesEl = document.getElementById("projectSources");
       const globalSourceCandidatesEl = document.getElementById(
@@ -374,6 +376,10 @@
         connectButtonEl.disabled = !!connecting;
       }
 
+      function getServerBaseUrl() {
+        return normalizeBaseUrl(FIXED_SERVER_BASE_URL);
+      }
+
       function normalizeBaseUrl(value) {
         return String(value).trim().replace(/\/+$/, "");
       }
@@ -502,33 +508,19 @@
         setStatus("Sources を保存しています...", false);
       });
 
-      {# document.addEventListener("change", function (event) {
-        var target = event.target;
-
-        if (!(target instanceof HTMLInputElement)) {
-          return;
-        }
-
-        if (
-          target.name === "global-source-candidate" ||
-          target.name === "project-source-candidate"
-        ) {
-          updateRunLintAvailability();
-        }
-      }); #}
-
       runButtonEl.addEventListener("click", () => {
+        var baseUrl = getServerBaseUrl();
+
         setRunning(true);
         setStatus("lint を実行しています...", false);
 
         sendToPlugin({
           type: "run-lint",
-          serverBaseUrl: serverBaseUrlEl.value,
+          serverBaseUrl: baseUrl,
         });
       });
-
       connectButtonEl.addEventListener("click", () => {
-        const baseUrl = normalizeBaseUrl(serverBaseUrlEl.value);
+        const baseUrl = getServerBaseUrl();
 
         console.log("[ui] connect click", {
           rawBaseUrl: serverBaseUrlEl.value,
@@ -583,7 +575,7 @@
           console.log("[ui] init received", msg.config);
           console.log("[ui] init candidates", msg.candidates);
 
-          serverBaseUrlEl.value = msg.config.serverBaseUrl || "";
+          serverBaseUrlEl.value = getServerBaseUrl();
           currentCandidates = Array.isArray(msg.candidates)
             ? msg.candidates
             : [];
