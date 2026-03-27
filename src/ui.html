@@ -125,7 +125,9 @@
       </div>
 
       <button id="runButton" class="button" type="button">Run Lint</button>
-
+      <button id="setupPagesButton" class="button" type="button">
+        Setup Pages
+      </button>
       <div class="panel">
         <div class="label">Global Sources</div>
         <div id="globalSources" class="result">なし</div>
@@ -172,6 +174,7 @@
       const serverBaseUrlEl = document.getElementById("serverBaseUrl");
       const runButtonEl = document.getElementById("runButton");
       const connectButtonEl = document.getElementById("connectButton");
+      const setupPagesButtonEl = document.getElementById("setupPagesButton");
       const connectionStatusEl = document.getElementById("connectionStatus");
       const statusEl = document.getElementById("status");
       const resultEl = document.getElementById("result");
@@ -180,11 +183,15 @@
       const POLL_INTERVAL_MS = 1500;
       const POLL_TIMEOUT_MS = 60000;
 
+      const TEST_PAGE_NAME = "__test";
+      const ALLOWED_PAGE_NAME = "__allowedComponentList";
       let connectPollTimerId = 0;
       let connectDeadlineAt = 0;
       let activeConnectRequestId = "";
       let isConnecting = false;
       let currentCandidates = [];
+      let sessionToken = "";
+      let pluginAccess = null;
 
       function setStatus(message, isError) {
         statusEl.textContent = message;
@@ -250,7 +257,7 @@
 
         var totalSourceCount = globalSources.length + projectSources.length;
 
-        runButtonEl.disabled = totalSourceCount === 0;
+        runButtonEl.disabled = false;
       }
 
       function renderSources(config) {
@@ -365,6 +372,8 @@
           projectSources,
           "project-source-candidate",
         );
+
+        updateSourceControlsDisabled();
       }
 
       function setRunning(isRunning) {
@@ -418,6 +427,58 @@
         clearConnectPolling();
         setConnecting(false);
         setStatus(message, false);
+      }
+
+      function canUseProFeatures() {
+        if (!pluginAccess) {
+          return false;
+        }
+
+        if (pluginAccess.canUsePro === true) {
+          return true;
+        }
+
+        return false;
+      }
+
+      function updateSourceControlsDisabled() {
+        var disabled = canUseProFeatures() !== true;
+
+        var globalCheckboxes = document.querySelectorAll(
+          'input[name="global-source-candidate"]',
+        );
+        var projectCheckboxes = document.querySelectorAll(
+          'input[name="project-source-candidate"]',
+        );
+
+        for (var i = 0; i < globalCheckboxes.length; i += 1) {
+          globalCheckboxes[i].disabled = disabled;
+        }
+
+        for (var j = 0; j < projectCheckboxes.length; j += 1) {
+          projectCheckboxes[j].disabled = disabled;
+        }
+
+        saveSourcesButtonEl.disabled = disabled;
+      }
+
+      async function refreshPluginAccess() {
+        if (!sessionToken) {
+          console.log("[ui] refreshPluginAccess: no sessionToken");
+          pluginAccess = null;
+          updateSourceControlsDisabled();
+          return;
+        }
+
+        try {
+          var access = await fetchPluginAccess();
+          console.log("[ui] refreshPluginAccess success", access);
+        } catch (error) {
+          console.log("[ui] refreshPluginAccess error", error);
+          pluginAccess = null;
+        }
+
+        updateSourceControlsDisabled();
       }
 
       async function pollConnectResult(baseUrl, requestId) {
@@ -474,11 +535,17 @@
             return;
           }
 
+          sessionToken = data.sessionToken;
+
           sendToPlugin({
             type: "save-session-token",
             serverBaseUrl: baseUrl,
             sessionToken: data.sessionToken,
           });
+
+          console.log(data.sessionToken);
+
+          refreshPluginAccess();
 
           finishConnectWaiting("OAuth 完了。sessionToken を保存しています...");
         } catch (error) {
@@ -490,7 +557,54 @@
         }
       }
 
+      async function fetchPluginAccess() {
+        var baseUrl = getServerBaseUrl();
+
+        if (!baseUrl) {
+          throw new Error("serverBaseUrl is empty");
+        }
+
+        if (!sessionToken || sessionToken.trim() === "") {
+          throw new Error("sessionToken is empty");
+        }
+
+        const url =
+          baseUrl +
+          "/api/plugin/access?sessionToken=" +
+          encodeURIComponent(sessionToken);
+
+        const response = await fetch(url, {
+          method: "GET",
+        });
+
+        const json = await response.json();
+
+        if (!response.ok) {
+          const message =
+            json && json.error && typeof json.error.message === "string"
+              ? json.error.message
+              : "Failed to fetch plugin access";
+
+          throw new Error(message);
+        }
+
+        if (!json || json.ok !== true || !json.data) {
+          throw new Error("Invalid plugin access response");
+        }
+
+        pluginAccess = json.data;
+
+        return json.data;
+      }
+
       saveSourcesButtonEl.addEventListener("click", function () {
+        if (canUseProFeatures() !== true) {
+          setStatus(
+            "Global Source / Project Source の選択は Pro で利用できます。",
+            true,
+          );
+          return;
+        }
         var globalSources = collectCheckedSources("global-source-candidate");
         var projectSources = collectCheckedSources("project-source-candidate");
 
@@ -563,6 +677,14 @@
         pollConnectResult(baseUrl, requestId);
       });
 
+      setupPagesButtonEl.addEventListener("click", function () {
+        setStatus("ページをセットアップしています...", false);
+
+        sendToPlugin({
+          type: "setup-pages",
+        });
+      });
+
       window.onmessage = (event) => {
         console.log("[plugin -> ui raw]", event.data);
 
@@ -580,9 +702,13 @@
             ? msg.candidates
             : [];
 
+          sessionToken =
+            typeof msg.sessionToken === "string" ? msg.sessionToken : "";
+
           renderSources(msg.config);
           renderSourceSelectors(msg.config, currentCandidates);
           updateRunLintAvailability(msg.config);
+          refreshPluginAccess();
           return;
         }
 
@@ -596,6 +722,12 @@
             clearConnectPolling();
             setConnecting(false);
             setStatus("接続済みです。", false);
+          }
+
+          if (!msg.connected) {
+            sessionToken = "";
+            pluginAccess = null;
+            updateSourceControlsDisabled();
           }
 
           return;
@@ -619,6 +751,16 @@
             "\n" +
             "markers: " +
             msg.markerCount;
+          return;
+        }
+
+        if (msg.type === "setup-pages-result") {
+          resultEl.textContent =
+            "__test: " +
+            (msg.testPageCreated ? "作成" : "既存") +
+            "\n" +
+            "__allowedComponentList: " +
+            (msg.allowedPageCreated ? "作成" : "既存");
           return;
         }
 
