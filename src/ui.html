@@ -107,16 +107,6 @@
   <body>
     <div class="wrap">
       <div class="field">
-        <label class="label" for="serverBaseUrl">Server Base URL</label>
-        <input
-          id="serverBaseUrl"
-          class="input"
-          type="text"
-          placeholder="https://kernel-linter-rest-server.vercel.app"
-        />
-      </div>
-
-      <div class="field">
         <button id="connectButton" class="button" type="button">Connect</button>
       </div>
 
@@ -171,7 +161,6 @@
       const projectSourceCandidatesEl = document.getElementById(
         "projectSourceCandidates",
       );
-      const serverBaseUrlEl = document.getElementById("serverBaseUrl");
       const runButtonEl = document.getElementById("runButton");
       const connectButtonEl = document.getElementById("connectButton");
       const setupPagesButtonEl = document.getElementById("setupPagesButton");
