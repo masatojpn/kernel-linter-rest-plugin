@@ -83,6 +83,25 @@
       .result {
         white-space: pre-wrap;
       }
+
+      .source-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .source-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .source-item input[type="checkbox"] {
+        margin: 0;
+      }
+
+      .source-item-label {
+        line-height: 1.4;
+      }
     </style>
   </head>
   <body>
@@ -106,7 +125,32 @@
       </div>
 
       <button id="runButton" class="button" type="button">Run Lint</button>
+      <button id="setupPagesButton" class="button" type="button">
+        Setup Pages
+      </button>
+      <div class="panel">
+        <div class="label">Global Sources</div>
+        <div id="globalSources" class="result">なし</div>
+      </div>
 
+      <div class="panel">
+        <div class="label">Project Sources</div>
+        <div id="projectSources" class="result">なし</div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Global Sourceを選択</div>
+        <div id="globalSourceCandidates" class="result">候補なし</div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Project Sourceを選択</div>
+        <div id="projectSourceCandidates" class="result">候補なし</div>
+      </div>
+
+      <button id="saveSourcesButton" class="button" type="button">
+        Save Sources
+      </button>
       <div class="panel">
         <div id="status" class="status">待機中</div>
       </div>
@@ -117,24 +161,219 @@
     </div>
 
     <script>
+      const FIXED_SERVER_BASE_URL =
+        "https://kernel-linter-rest-server.vercel.app";
+      const globalSourcesEl = document.getElementById("globalSources");
+      const projectSourcesEl = document.getElementById("projectSources");
+      const globalSourceCandidatesEl = document.getElementById(
+        "globalSourceCandidates",
+      );
+      const projectSourceCandidatesEl = document.getElementById(
+        "projectSourceCandidates",
+      );
       const serverBaseUrlEl = document.getElementById("serverBaseUrl");
       const runButtonEl = document.getElementById("runButton");
       const connectButtonEl = document.getElementById("connectButton");
+      const setupPagesButtonEl = document.getElementById("setupPagesButton");
       const connectionStatusEl = document.getElementById("connectionStatus");
       const statusEl = document.getElementById("status");
       const resultEl = document.getElementById("result");
+      const saveSourcesButtonEl = document.getElementById("saveSourcesButton");
 
       const POLL_INTERVAL_MS = 1500;
       const POLL_TIMEOUT_MS = 60000;
 
+      const TEST_PAGE_NAME = "__test";
+      const ALLOWED_PAGE_NAME = "__allowedComponentList";
       let connectPollTimerId = 0;
       let connectDeadlineAt = 0;
       let activeConnectRequestId = "";
       let isConnecting = false;
+      let currentCandidates = [];
+      let sessionToken = "";
+      let pluginAccess = null;
 
       function setStatus(message, isError) {
         statusEl.textContent = message;
         statusEl.classList.toggle("error", !!isError);
+      }
+
+      function formatSources(sources) {
+        if (!Array.isArray(sources) || sources.length === 0) {
+          return "なし";
+        }
+
+        return sources
+          .map(function (source, index) {
+            var fileKey =
+              source && typeof source.fileKey === "string"
+                ? source.fileKey
+                : "";
+
+            var pageName =
+              source && typeof source.pageName === "string"
+                ? source.pageName
+                : "";
+
+            return String(index + 1) + ". " + fileKey + " / " + pageName;
+          })
+          .join("\n");
+      }
+
+      function collectCheckedSources(groupName) {
+        var checkedEls = document.querySelectorAll(
+          'input[name="' + groupName + '"]:checked',
+        );
+
+        var result = [];
+
+        for (var i = 0; i < checkedEls.length; i += 1) {
+          var el = checkedEls[i];
+          var fileKey = el.dataset.fileKey;
+
+          if (!fileKey) {
+            continue;
+          }
+
+          result.push({
+            fileKey: fileKey,
+            pageName: "__allowedComponentList",
+          });
+        }
+
+        return result;
+      }
+
+      function updateRunLintAvailability(config) {
+        var globalSources =
+          config && Array.isArray(config.globalSources)
+            ? config.globalSources
+            : [];
+
+        var projectSources =
+          config && Array.isArray(config.projectSources)
+            ? config.projectSources
+            : [];
+
+        var totalSourceCount = globalSources.length + projectSources.length;
+
+        runButtonEl.disabled = false;
+      }
+
+      function renderSources(config) {
+        var globalSources =
+          config && Array.isArray(config.globalSources)
+            ? config.globalSources
+            : [];
+
+        var projectSources =
+          config && Array.isArray(config.projectSources)
+            ? config.projectSources
+            : [];
+
+        globalSourcesEl.textContent = formatSources(globalSources);
+        projectSourcesEl.textContent = formatSources(projectSources);
+      }
+
+      function isSourceChecked(sources, candidate) {
+        if (!Array.isArray(sources)) {
+          return false;
+        }
+
+        for (var i = 0; i < sources.length; i += 1) {
+          var source = sources[i];
+
+          if (!source || typeof source !== "object") {
+            continue;
+          }
+
+          if (
+            source.fileKey === candidate.fileKey &&
+            source.pageName === "__allowedComponentList"
+          ) {
+            return true;
+          }
+        }
+
+        return false;
+      }
+
+      function createCandidateCheckbox(candidate, checked, groupName) {
+        var wrapper = document.createElement("label");
+        wrapper.className = "source-item";
+
+        var checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.name = groupName;
+        checkbox.value = candidate.fileKey;
+        checkbox.checked = checked;
+        checkbox.dataset.fileKey = candidate.fileKey;
+        checkbox.dataset.label = candidate.label;
+
+        var text = document.createElement("span");
+        text.className = "source-item-label";
+        text.textContent = candidate.label;
+
+        wrapper.appendChild(checkbox);
+        wrapper.appendChild(text);
+
+        return wrapper;
+      }
+
+      function renderCandidateList(
+        container,
+        candidates,
+        selectedSources,
+        groupName,
+      ) {
+        container.innerHTML = "";
+
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+          container.textContent = "候補なし";
+          return;
+        }
+
+        var list = document.createElement("div");
+        list.className = "source-list";
+
+        for (var i = 0; i < candidates.length; i += 1) {
+          var candidate = candidates[i];
+          var checked = isSourceChecked(selectedSources, candidate);
+
+          list.appendChild(
+            createCandidateCheckbox(candidate, checked, groupName),
+          );
+        }
+
+        container.appendChild(list);
+      }
+
+      function renderSourceSelectors(config, candidates) {
+        var globalSources =
+          config && Array.isArray(config.globalSources)
+            ? config.globalSources
+            : [];
+
+        var projectSources =
+          config && Array.isArray(config.projectSources)
+            ? config.projectSources
+            : [];
+
+        renderCandidateList(
+          globalSourceCandidatesEl,
+          candidates,
+          globalSources,
+          "global-source-candidate",
+        );
+
+        renderCandidateList(
+          projectSourceCandidatesEl,
+          candidates,
+          projectSources,
+          "project-source-candidate",
+        );
+
+        updateSourceControlsDisabled();
       }
 
       function setRunning(isRunning) {
@@ -144,6 +383,10 @@
       function setConnecting(connecting) {
         isConnecting = !!connecting;
         connectButtonEl.disabled = !!connecting;
+      }
+
+      function getServerBaseUrl() {
+        return normalizeBaseUrl(FIXED_SERVER_BASE_URL);
       }
 
       function normalizeBaseUrl(value) {
@@ -184,6 +427,58 @@
         clearConnectPolling();
         setConnecting(false);
         setStatus(message, false);
+      }
+
+      function canUseProFeatures() {
+        if (!pluginAccess) {
+          return false;
+        }
+
+        if (pluginAccess.canUsePro === true) {
+          return true;
+        }
+
+        return false;
+      }
+
+      function updateSourceControlsDisabled() {
+        var disabled = canUseProFeatures() !== true;
+
+        var globalCheckboxes = document.querySelectorAll(
+          'input[name="global-source-candidate"]',
+        );
+        var projectCheckboxes = document.querySelectorAll(
+          'input[name="project-source-candidate"]',
+        );
+
+        for (var i = 0; i < globalCheckboxes.length; i += 1) {
+          globalCheckboxes[i].disabled = disabled;
+        }
+
+        for (var j = 0; j < projectCheckboxes.length; j += 1) {
+          projectCheckboxes[j].disabled = disabled;
+        }
+
+        saveSourcesButtonEl.disabled = disabled;
+      }
+
+      async function refreshPluginAccess() {
+        if (!sessionToken) {
+          console.log("[ui] refreshPluginAccess: no sessionToken");
+          pluginAccess = null;
+          updateSourceControlsDisabled();
+          return;
+        }
+
+        try {
+          var access = await fetchPluginAccess();
+          console.log("[ui] refreshPluginAccess success", access);
+        } catch (error) {
+          console.log("[ui] refreshPluginAccess error", error);
+          pluginAccess = null;
+        }
+
+        updateSourceControlsDisabled();
       }
 
       async function pollConnectResult(baseUrl, requestId) {
@@ -240,11 +535,17 @@
             return;
           }
 
+          sessionToken = data.sessionToken;
+
           sendToPlugin({
             type: "save-session-token",
             serverBaseUrl: baseUrl,
             sessionToken: data.sessionToken,
           });
+
+          console.log(data.sessionToken);
+
+          refreshPluginAccess();
 
           finishConnectWaiting("OAuth 完了。sessionToken を保存しています...");
         } catch (error) {
@@ -256,18 +557,84 @@
         }
       }
 
+      async function fetchPluginAccess() {
+        var baseUrl = getServerBaseUrl();
+
+        if (!baseUrl) {
+          throw new Error("serverBaseUrl is empty");
+        }
+
+        if (!sessionToken || sessionToken.trim() === "") {
+          throw new Error("sessionToken is empty");
+        }
+
+        const url =
+          baseUrl +
+          "/api/plugin/access?sessionToken=" +
+          encodeURIComponent(sessionToken);
+
+        const response = await fetch(url, {
+          method: "GET",
+        });
+
+        const json = await response.json();
+
+        if (!response.ok) {
+          const message =
+            json && json.error && typeof json.error.message === "string"
+              ? json.error.message
+              : "Failed to fetch plugin access";
+
+          throw new Error(message);
+        }
+
+        if (!json || json.ok !== true || !json.data) {
+          throw new Error("Invalid plugin access response");
+        }
+
+        pluginAccess = json.data;
+
+        return json.data;
+      }
+
+      saveSourcesButtonEl.addEventListener("click", function () {
+        if (canUseProFeatures() !== true) {
+          setStatus(
+            "Global Source / Project Source の選択は Pro で利用できます。",
+            true,
+          );
+          return;
+        }
+        var globalSources = collectCheckedSources("global-source-candidate");
+        var projectSources = collectCheckedSources("project-source-candidate");
+
+        console.log("[ui] save sources", {
+          globalSources: globalSources,
+          projectSources: projectSources,
+        });
+
+        sendToPlugin({
+          type: "save-sources",
+          globalSources: globalSources,
+          projectSources: projectSources,
+        });
+
+        setStatus("Sources を保存しています...", false);
+      });
+
       runButtonEl.addEventListener("click", () => {
+        var baseUrl = getServerBaseUrl();
+
         setRunning(true);
         setStatus("lint を実行しています...", false);
 
         sendToPlugin({
           type: "run-lint",
-          serverBaseUrl: serverBaseUrlEl.value,
+          serverBaseUrl: baseUrl,
         });
       });
-
       connectButtonEl.addEventListener("click", () => {
-        const baseUrl = normalizeBaseUrl(serverBaseUrlEl.value);
+        const baseUrl = getServerBaseUrl();
 
         console.log("[ui] connect click", {
           rawBaseUrl: serverBaseUrlEl.value,
@@ -310,6 +677,14 @@
         pollConnectResult(baseUrl, requestId);
       });
 
+      setupPagesButtonEl.addEventListener("click", function () {
+        setStatus("ページをセットアップしています...", false);
+
+        sendToPlugin({
+          type: "setup-pages",
+        });
+      });
+
       window.onmessage = (event) => {
         console.log("[plugin -> ui raw]", event.data);
 
@@ -320,7 +695,20 @@
 
         if (msg.type === "init") {
           console.log("[ui] init received", msg.config);
-          serverBaseUrlEl.value = msg.config.serverBaseUrl || "";
+          console.log("[ui] init candidates", msg.candidates);
+
+          serverBaseUrlEl.value = getServerBaseUrl();
+          currentCandidates = Array.isArray(msg.candidates)
+            ? msg.candidates
+            : [];
+
+          sessionToken =
+            typeof msg.sessionToken === "string" ? msg.sessionToken : "";
+
+          renderSources(msg.config);
+          renderSourceSelectors(msg.config, currentCandidates);
+          updateRunLintAvailability(msg.config);
+          refreshPluginAccess();
           return;
         }
 
@@ -334,6 +722,12 @@
             clearConnectPolling();
             setConnecting(false);
             setStatus("接続済みです。", false);
+          }
+
+          if (!msg.connected) {
+            sessionToken = "";
+            pluginAccess = null;
+            updateSourceControlsDisabled();
           }
 
           return;
@@ -357,6 +751,16 @@
             "\n" +
             "markers: " +
             msg.markerCount;
+          return;
+        }
+
+        if (msg.type === "setup-pages-result") {
+          resultEl.textContent =
+            "__test: " +
+            (msg.testPageCreated ? "作成" : "既存") +
+            "\n" +
+            "__allowedComponentList: " +
+            (msg.allowedPageCreated ? "作成" : "既存");
           return;
         }
 
