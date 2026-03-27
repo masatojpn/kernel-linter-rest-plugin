@@ -241,7 +241,9 @@ type ViolationType =
   | "PADDING_RIGHT_NEEDS_VARIABLE"
   | "PADDING_BOTTOM_NEEDS_VARIABLE"
   | "PADDING_LEFT_NEEDS_VARIABLE"
-  | "CORNER_RADIUS_NEEDS_VARIABLE";
+  | "CORNER_RADIUS_NEEDS_VARIABLE"
+  | "TEXT_TYPOGRAPHY_VARIABLE_MISSING"
+  | "TEXT_FONT_CONTEXT_MISMATCH";
 
 type NumericField =
   | "width"
@@ -262,6 +264,7 @@ type Violation = {
   type: ViolationType;
   node: SceneNode;
   message: string;
+  severity: "error" | "warning";
 };
 
 type LintResult = {
@@ -1078,6 +1081,96 @@ function collectTestPageLintTargets(): SceneNode[] {
   }) as SceneNode[];
 }
 
+function hasTextStyleApplied(node: TextNode): boolean {
+  return typeof node.textStyleId === "string" && node.textStyleId !== "";
+}
+
+function hasTextBoundVariable(node: TextNode, field: string): boolean {
+  var anyNode = node as any;
+  var boundVariables = anyNode.boundVariables;
+
+  if (!boundVariables || typeof boundVariables !== "object") {
+    return false;
+  }
+
+  var value = boundVariables[field];
+
+  if (!value) {
+    return false;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(Boolean);
+  }
+
+  return true;
+}
+
+function getTextTypographyVariableState(node: TextNode): {
+  hasFontFamily: boolean;
+  hasFontWeight: boolean;
+  hasLineHeight: boolean;
+  hasLetterSpacing: boolean;
+} {
+  return {
+    hasFontFamily: hasTextBoundVariable(node, "fontFamily"),
+    hasFontWeight: hasTextBoundVariable(node, "fontWeight"),
+    hasLineHeight: hasTextBoundVariable(node, "lineHeight"),
+    hasLetterSpacing: hasTextBoundVariable(node, "letterSpacing")
+  };
+}
+
+function inferTypographyContextFromVariableName(value: string): string {
+  if (value.indexOf("/JP/") >= 0 || value.indexOf("JP") >= 0) {
+    return "JP";
+  }
+
+  if (value.indexOf("/EN/") >= 0 || value.indexOf("EN") >= 0) {
+    return "EN";
+  }
+
+  return "";
+}
+
+function getBoundVariableName(node: TextNode, field: string): string {
+  var anyNode = node as any;
+  var boundVariables = anyNode.boundVariables;
+
+  if (!boundVariables || typeof boundVariables !== "object") {
+    return "";
+  }
+
+  var value = boundVariables[field];
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  if ("name" in value && typeof value.name === "string") {
+    return value.name;
+  }
+
+  return "";
+}
+
+function hasMatchingTextFamilyWeightContext(node: TextNode): boolean {
+  var familyVariableName = getBoundVariableName(node, "fontFamily");
+  var weightVariableName = getBoundVariableName(node, "fontWeight");
+
+  if (familyVariableName === "" || weightVariableName === "") {
+    return true;
+  }
+
+  var familyContext = inferTypographyContextFromVariableName(familyVariableName);
+  var weightContext = inferTypographyContextFromVariableName(weightVariableName);
+
+  if (familyContext === "" || weightContext === "") {
+    return true;
+  }
+
+  return familyContext === weightContext;
+}
+
 async function lintSceneNodes(
   nodes: SceneNode[],
   allowedKeys: Set<string>,
@@ -1103,16 +1196,40 @@ async function lintSceneNodes(
     }
 
     if (node.type === "TEXT") {
-      var shouldFlagRawText =
-        !hasAncestorType(node, "INSTANCE") &&
-        node.characters.trim().length > 0;
+      var hasCharacters = node.characters.trim().length > 0;
 
-      if (shouldFlagRawText) {
-        violations.push({
-          type: "RAW_TEXT",
-          node: node,
-          message: "RAW TEXT"
-        });
+      if (hasCharacters) {
+        var hasTextStyle = hasTextStyleApplied(node);
+
+        if (!hasTextStyle) {
+          var typographyState = getTextTypographyVariableState(node);
+
+          var hasAllTypographyVariables =
+            typographyState.hasFontFamily &&
+            typographyState.hasFontWeight &&
+            typographyState.hasLineHeight &&
+            typographyState.hasLetterSpacing;
+
+          if (!hasAllTypographyVariables) {
+            violations.push({
+              type: "TEXT_TYPOGRAPHY_VARIABLE_MISSING",
+              node: node,
+              message: "TEXT TYPOGRAPHY VARIABLES MISSING",
+              severity: "error"
+            });
+          } else {
+            var hasMatchingContext = hasMatchingTextFamilyWeightContext(node);
+
+            if (!hasMatchingContext) {
+              violations.push({
+                type: "TEXT_FONT_CONTEXT_MISMATCH",
+                node: node,
+                message: "TEXT FONT CONTEXT MISMATCH",
+                severity: "warning"
+              });
+            }
+          }
+        }
       }
     }
 
@@ -1147,7 +1264,8 @@ async function lintSceneNodes(
         violations.push({
           type: "NOT_REGISTERED",
           node: node,
-          message: "NOT REGISTERED"
+          message: "NOT REGISTERED",
+          severity: "error"
         });
       }
     }
@@ -1266,6 +1384,7 @@ function checkCornerRadiusVariableViolation(node: SceneNode): Violation | null {
         type: "CORNER_RADIUS_NEEDS_VARIABLE",
         node,
         message: "CORNER RADIUS NEEDS VARIABLE",
+        severity: "error"
       };
     }
   }
@@ -1331,6 +1450,7 @@ async function checkColorVariableViolations(
           type: "FILL_NEEDS_VARIABLE",
           node,
           message: "FILL NEEDS VARIABLE",
+          severity: "error"
         });
         break;
       }
@@ -1355,6 +1475,7 @@ async function checkColorVariableViolations(
           type: "STROKE_NEEDS_VARIABLE",
           node,
           message: "STROKE NEEDS VARIABLE",
+          severity: "error"
         });
         break;
       }
@@ -1413,6 +1534,7 @@ async function checkColorVariableViolations(
             type: "FILL_NEEDS_VARIABLE",
             node,
             message: "TEXT FILL NEEDS VARIABLE",
+            severity: "error"
           });
           break;
         }
@@ -1667,6 +1789,7 @@ function checkNumericVariableViolations(node: SceneNode): Violation[] {
       type: violationTypeFromNumericField(check.field),
       node,
       message: check.message,
+      severity: "error"
     });
   }
 
@@ -1778,6 +1901,14 @@ function getViolationColor(type: ViolationType): RGB {
     type === "CORNER_RADIUS_NEEDS_VARIABLE"
   ) {
     return { r: 0.353, g: 0.608, b: 0.996 };
+  }
+
+  if (type === "TEXT_TYPOGRAPHY_VARIABLE_MISSING") {
+    return { r: 1, g: 0.231, b: 0.188 };
+  }
+
+  if (type === "TEXT_FONT_CONTEXT_MISMATCH") {
+    return { r: 0.933, g: 0.565, b: 0.114 };
   }
 
   return { r: 0.933, g: 0.267, b: 0.267 };
