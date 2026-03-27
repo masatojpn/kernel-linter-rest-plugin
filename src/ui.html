@@ -626,7 +626,6 @@
         const baseUrl = getServerBaseUrl();
 
         console.log("[ui] connect click", {
-          rawBaseUrl: serverBaseUrlEl.value,
           normalizedBaseUrl: baseUrl,
         });
 
@@ -686,7 +685,6 @@
           console.log("[ui] init received", msg.config);
           console.log("[ui] init candidates", msg.candidates);
 
-          serverBaseUrlEl.value = getServerBaseUrl();
           currentCandidates = Array.isArray(msg.candidates)
             ? msg.candidates
             : [];
