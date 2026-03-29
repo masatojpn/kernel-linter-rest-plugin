@@ -96,6 +96,32 @@ async function getKernelIndexCandidates() {
     console.log("[kernel-index] candidates", result);
     return result;
 }
+async function sanitizeSourcesForRunLint(sources) {
+    if (sources.length === 0) {
+        return {
+            activeSources: [],
+            skippedSources: []
+        };
+    }
+    if (cachedKernelIndexFileKeys.size === 0) {
+        const candidates = await getKernelIndexCandidates();
+        setCachedKernelIndexCandidates(candidates);
+    }
+    const activeSources = [];
+    const skippedSources = [];
+    for (const source of sources) {
+        if (cachedKernelIndexFileKeys.has(source.fileKey)) {
+            activeSources.push(source);
+        }
+        else {
+            skippedSources.push(source);
+        }
+    }
+    return {
+        activeSources,
+        skippedSources
+    };
+}
 // const STORAGE_KEY = "kernel-linter-rest-config";
 // const MARKER_NAME = "__kernel-linter-marker";
 const UI_WIDTH = 360;
@@ -108,11 +134,24 @@ const UI_HEIGHT = 320;
 //     console.log("[kernel-index] failed", error);
 //   }
 // })();
+let cachedKernelIndexCandidates = [];
+let cachedKernelIndexFileKeys = new Set();
 figma.showUI(__html__, {
     width: UI_WIDTH,
     height: UI_HEIGHT,
     themeColors: true
 });
+function setCachedKernelIndexCandidates(candidates) {
+    cachedKernelIndexCandidates = candidates.slice();
+    const nextFileKeys = new Set();
+    for (const candidate of candidates) {
+        if (!candidate.fileKey) {
+            continue;
+        }
+        nextFileKeys.add(candidate.fileKey);
+    }
+    cachedKernelIndexFileKeys = nextFileKeys;
+}
 function findPageByName(name) {
     for (var i = 0; i < figma.root.children.length; i += 1) {
         var node = figma.root.children[i];
@@ -144,6 +183,7 @@ void boot();
 async function boot() {
     var config = await loadConfig();
     var candidates = await getKernelIndexCandidates();
+    setCachedKernelIndexCandidates(candidates);
     console.log("[code] boot loadConfig", {
         serverBaseUrl: config.serverBaseUrl,
         hasSessionToken: !!config.sessionToken,
@@ -166,6 +206,7 @@ figma.ui.onmessage = async function (msg) {
         if (msg.type === "ui-ready") {
             var initConfig = await loadConfig();
             var initCandidates = await getKernelIndexCandidates();
+            setCachedKernelIndexCandidates(initCandidates);
             postToUI({
                 type: "init",
                 config: initConfig,
@@ -202,6 +243,7 @@ figma.ui.onmessage = async function (msg) {
             });
             var savedConfigForSources = await loadConfig();
             var savedCandidatesForSources = await getKernelIndexCandidates();
+            setCachedKernelIndexCandidates(savedCandidatesForSources);
             console.log("[code] sources saved", {
                 globalSources: savedConfigForSources.globalSources,
                 projectSources: savedConfigForSources.projectSources
@@ -237,6 +279,7 @@ figma.ui.onmessage = async function (msg) {
             });
             var savedConfig = await loadConfig();
             var savedCandidates = await getKernelIndexCandidates();
+            setCachedKernelIndexCandidates(savedCandidates);
             console.log("[code] config after save", {
                 serverBaseUrl: savedConfig.serverBaseUrl,
                 hasSessionToken: !!savedConfig.sessionToken,
@@ -263,7 +306,10 @@ figma.ui.onmessage = async function (msg) {
             var currentConfig = await loadConfig();
             var serverBaseUrl = normalizeBaseUrl(msg.serverBaseUrl);
             var sessionToken = currentConfig.sessionToken;
-            var sources = mergeSources(currentConfig.globalSources, currentConfig.projectSources);
+            var savedSources = mergeSources(currentConfig.globalSources, currentConfig.projectSources);
+            var sanitizedSourcesResult = await sanitizeSourcesForRunLint(savedSources);
+            var sources = sanitizedSourcesResult.activeSources;
+            var skippedSources = sanitizedSourcesResult.skippedSources;
             console.log("[code] run-lint start", {
                 inputServerBaseUrl: msg.serverBaseUrl,
                 normalizedServerBaseUrl: serverBaseUrl,
@@ -274,8 +320,11 @@ figma.ui.onmessage = async function (msg) {
             console.log("[code] run-lint sources", {
                 globalSourceCount: currentConfig.globalSources.length,
                 projectSourceCount: currentConfig.projectSources.length,
-                mergedSourceCount: sources.length,
-                sources: sources
+                mergedSourceCount: savedSources.length,
+                activeSourceCount: sources.length,
+                skippedSourceCount: skippedSources.length,
+                activeSources: sources,
+                skippedSources: skippedSources
             });
             if (!serverBaseUrl) {
                 throw new Error("Server Base URL を入力してください。");
@@ -290,6 +339,14 @@ figma.ui.onmessage = async function (msg) {
                 globalSources: currentConfigForUpdate.globalSources,
                 projectSources: currentConfigForUpdate.projectSources
             });
+            if (skippedSources.length > 0) {
+                postToUI({
+                    type: "status",
+                    message: "このファイルで利用できない Source を " +
+                        String(skippedSources.length) +
+                        " 件スキップしました。Libraries で追加・有効化を確認してください。"
+                });
+            }
             postToUI({
                 type: "status",
                 message: "allowed components を取得しています..."
@@ -390,6 +447,23 @@ figma.ui.onmessage = async function (msg) {
                 });
                 return;
             }
+            postToUI({
+                type: "status",
+                message: "mode: Check\n" +
+                    "lint 完了\n" +
+                    "invalid: " +
+                    String(result.invalidCount) +
+                    "\n" +
+                    "markers: " +
+                    String(result.markerCount)
+            });
+            postToUI({
+                type: "result",
+                totalInstances: result.totalInstances,
+                invalidCount: result.invalidCount,
+                markerCount: result.markerCount
+            });
+            return;
         }
     }
     catch (error) {
@@ -696,20 +770,98 @@ function collectTestPageLintTargets() {
 function hasTextStyleApplied(node) {
     return typeof node.textStyleId === "string" && node.textStyleId !== "";
 }
+function getTextSegmentFieldsForBoundVariable(field) {
+    if (field === "fontFamily") {
+        return ["fontName", "boundVariables"];
+    }
+    if (field === "fontWeight") {
+        return ["fontWeight", "boundVariables"];
+    }
+    if (field === "lineHeight") {
+        return ["lineHeight", "boundVariables"];
+    }
+    if (field === "letterSpacing") {
+        return ["letterSpacing", "boundVariables"];
+    }
+    return ["boundVariables"];
+}
 function hasTextBoundVariable(node, field) {
     var anyNode = node;
     var boundVariables = anyNode.boundVariables;
-    if (!boundVariables || typeof boundVariables !== "object") {
-        return false;
+    if (boundVariables && typeof boundVariables === "object") {
+        var value = boundVariables[field];
+        if (Array.isArray(value)) {
+            if (value.some(Boolean)) {
+                return true;
+            }
+        }
+        else if (value) {
+            return true;
+        }
     }
-    var value = boundVariables[field];
-    if (!value) {
-        return false;
+    var segments = field === "fontFamily"
+        ? node.getStyledTextSegments(["fontName", "boundVariables"])
+        : field === "fontWeight"
+            ? node.getStyledTextSegments(["fontWeight", "boundVariables"])
+            : field === "fontSize"
+                ? node.getStyledTextSegments(["fontSize", "boundVariables"])
+                : field === "lineHeight"
+                    ? node.getStyledTextSegments(["lineHeight", "boundVariables"])
+                    : field === "letterSpacing"
+                        ? node.getStyledTextSegments(["letterSpacing", "boundVariables"])
+                        : node.getStyledTextSegments(["boundVariables"]);
+    for (var i = 0; i < segments.length; i += 1) {
+        var segment = segments[i];
+        var segmentBoundVariables = segment.boundVariables;
+        if (!segmentBoundVariables || typeof segmentBoundVariables !== "object") {
+            continue;
+        }
+        var segmentValue = segmentBoundVariables[field];
+        if (Array.isArray(segmentValue)) {
+            if (segmentValue.some(Boolean)) {
+                return true;
+            }
+        }
+        else if (segmentValue) {
+            return true;
+        }
     }
-    if (Array.isArray(value)) {
-        return value.some(Boolean);
+    return false;
+}
+function getTextSizeAndLineHeightVariableState(node) {
+    return {
+        hasFontSize: hasTextBoundVariable(node, "fontSize"),
+        hasLineHeight: hasTextBoundVariable(node, "lineHeight")
+    };
+}
+function checkTextTypographyViolation(node) {
+    var hasCharacters = node.characters.trim().length > 0;
+    if (!hasCharacters) {
+        return null;
     }
-    return true;
+    var hasTextStyle = hasTextStyleApplied(node);
+    if (hasTextStyle) {
+        return null;
+    }
+    var typographyState = getTextSizeAndLineHeightVariableState(node);
+    var hasRequiredTypographyVariables = typographyState.hasFontSize && typographyState.hasLineHeight;
+    if (hasRequiredTypographyVariables) {
+        return null;
+    }
+    console.log("[code] typography missing", {
+        nodeId: node.id,
+        nodeName: node.name,
+        characters: node.characters,
+        textStyleId: node.textStyleId,
+        typographyState: typographyState,
+        nodeBoundVariables: node.boundVariables
+    });
+    return {
+        type: "TEXT_TYPOGRAPHY_VARIABLE_MISSING",
+        node: node,
+        message: "TEXT SIZE / LINE HEIGHT VARIABLES MISSING",
+        severity: "error"
+    };
 }
 function getTextTypographyVariableState(node) {
     return {
@@ -731,15 +883,39 @@ function inferTypographyContextFromVariableName(value) {
 function getBoundVariableName(node, field) {
     var anyNode = node;
     var boundVariables = anyNode.boundVariables;
-    if (!boundVariables || typeof boundVariables !== "object") {
-        return "";
+    if (boundVariables && typeof boundVariables === "object") {
+        var value = boundVariables[field];
+        if (value &&
+            typeof value === "object" &&
+            !Array.isArray(value) &&
+            "name" in value &&
+            typeof value.name === "string") {
+            return value.name;
+        }
     }
-    var value = boundVariables[field];
-    if (!value || typeof value !== "object") {
-        return "";
-    }
-    if ("name" in value && typeof value.name === "string") {
-        return value.name;
+    var segments = field === "fontFamily"
+        ? node.getStyledTextSegments(["fontName", "boundVariables"])
+        : field === "fontWeight"
+            ? node.getStyledTextSegments(["fontWeight", "boundVariables"])
+            : field === "lineHeight"
+                ? node.getStyledTextSegments(["lineHeight", "boundVariables"])
+                : field === "letterSpacing"
+                    ? node.getStyledTextSegments(["letterSpacing", "boundVariables"])
+                    : node.getStyledTextSegments(["boundVariables"]);
+    for (var i = 0; i < segments.length; i += 1) {
+        var segment = segments[i];
+        var segmentBoundVariables = segment.boundVariables;
+        if (!segmentBoundVariables || typeof segmentBoundVariables !== "object") {
+            continue;
+        }
+        var segmentValue = segmentBoundVariables[field];
+        if (segmentValue &&
+            typeof segmentValue === "object" &&
+            !Array.isArray(segmentValue) &&
+            "name" in segmentValue &&
+            typeof segmentValue.name === "string") {
+            return segmentValue.name;
+        }
     }
     return "";
 }
@@ -771,51 +947,32 @@ async function lintSceneNodes(nodes, allowedKeys, allowedSignatures) {
             continue;
         }
         if (node.type === "TEXT") {
-            var hasCharacters = node.characters.trim().length > 0;
-            if (hasCharacters) {
-                var hasTextStyle = hasTextStyleApplied(node);
-                if (!hasTextStyle) {
-                    var typographyState = getTextTypographyVariableState(node);
-                    var hasAllTypographyVariables = typographyState.hasFontFamily &&
-                        typographyState.hasFontWeight &&
-                        typographyState.hasLineHeight &&
-                        typographyState.hasLetterSpacing;
-                    if (!hasAllTypographyVariables) {
-                        violations.push({
-                            type: "TEXT_TYPOGRAPHY_VARIABLE_MISSING",
-                            node: node,
-                            message: "TEXT TYPOGRAPHY VARIABLES MISSING",
-                            severity: "error"
-                        });
-                    }
-                    else {
-                        var hasMatchingContext = hasMatchingTextFamilyWeightContext(node);
-                        if (!hasMatchingContext) {
-                            violations.push({
-                                type: "TEXT_FONT_CONTEXT_MISMATCH",
-                                node: node,
-                                message: "TEXT FONT CONTEXT MISMATCH",
-                                severity: "warning"
-                            });
-                        }
-                    }
+            if (!hasAncestorType(node, "INSTANCE")) {
+                var rawTextRecommendation = checkRawTextRecommendation(node);
+                if (rawTextRecommendation) {
+                    violations.push(rawTextRecommendation);
+                }
+                var textViolation = checkTextTypographyViolation(node);
+                if (textViolation) {
+                    violations.push(textViolation);
                 }
             }
         }
         if (node.type === "INSTANCE") {
+            const instanceNode = node;
             totalInstances += 1;
-            var keyCandidates = await toAllowedKeyCandidatesFromInstance(node);
+            var keyCandidates = await toAllowedKeyCandidatesFromInstance(instanceNode);
             var keyMatched = hasAnyAllowedKey(allowedKeys, keyCandidates);
-            var signature = await toLegacySignatureFromInstance(node);
+            var signature = await toLegacySignatureFromInstance(instanceNode);
             var signatureMatched = false;
             if (signature && allowedSignatures.has(signature)) {
                 signatureMatched = true;
             }
             var isAllowed = keyMatched || signatureMatched;
-            if (node.name === "Text") {
+            if (instanceNode.name === "Text") {
                 console.log("[code] text instance check", {
-                    nodeId: node.id,
-                    nodeName: node.name,
+                    nodeId: instanceNode.id,
+                    nodeName: instanceNode.name,
                     keyCandidates: keyCandidates,
                     signature: signature,
                     keyMatched: keyMatched,
@@ -826,10 +983,30 @@ async function lintSceneNodes(nodes, allowedKeys, allowedSignatures) {
             if (!isAllowed) {
                 violations.push({
                     type: "NOT_REGISTERED",
-                    node: node,
+                    node: instanceNode,
                     message: "NOT REGISTERED",
                     severity: "error"
                 });
+            }
+            else {
+                var instanceTextNodes = instanceNode.findAll(function (child) {
+                    if (child.type !== "TEXT") {
+                        return false;
+                    }
+                    if (!child.visible) {
+                        return false;
+                    }
+                    if (isInsideMarkerLayer(child)) {
+                        return false;
+                    }
+                    return isNearestInstanceAncestor(child, instanceNode);
+                });
+                for (var j = 0; j < instanceTextNodes.length; j += 1) {
+                    var instanceTextViolation = checkTextTypographyViolation(instanceTextNodes[j]);
+                    if (instanceTextViolation) {
+                        violations.push(instanceTextViolation);
+                    }
+                }
             }
         }
         var colorViolations = await checkColorVariableViolations(node);
@@ -1251,6 +1428,31 @@ function uniqueViolations(violations) {
         }
     }
     return Array.from(map.values());
+}
+function isNearestInstanceAncestor(node, instance) {
+    var current = node.parent;
+    while (current) {
+        if (current.type === "INSTANCE") {
+            return current.id === instance.id;
+        }
+        current = current.parent;
+    }
+    return false;
+}
+function checkRawTextRecommendation(node) {
+    if (hasAncestorType(node, "INSTANCE")) {
+        return null;
+    }
+    var hasCharacters = node.characters.trim().length > 0;
+    if (!hasCharacters) {
+        return null;
+    }
+    return {
+        type: "RAW_TEXT",
+        node: node,
+        message: "RAW TEXT SHOULD BE INSTANCE",
+        severity: "warning"
+    };
 }
 function hasAncestorType(node, type) {
     var current = node.parent;

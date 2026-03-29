@@ -187,6 +187,34 @@
         statusEl.classList.toggle("error", !!isError);
       }
 
+      function getSourceLabelByFileKey(fileKey) {
+        if (!fileKey) {
+          return "";
+        }
+
+        if (!Array.isArray(currentCandidates)) {
+          return fileKey;
+        }
+
+        for (var i = 0; i < currentCandidates.length; i += 1) {
+          var candidate = currentCandidates[i];
+
+          if (!candidate || typeof candidate !== "object") {
+            continue;
+          }
+
+          if (candidate.fileKey === fileKey) {
+            if (typeof candidate.label === "string" && candidate.label !== "") {
+              return candidate.label;
+            }
+
+            break;
+          }
+        }
+
+        return fileKey;
+      }
+
       function formatSources(sources) {
         if (!Array.isArray(sources) || sources.length === 0) {
           return "なし";
@@ -204,7 +232,9 @@
                 ? source.pageName
                 : "";
 
-            return String(index + 1) + ". " + fileKey + " / " + pageName;
+            var label = getSourceLabelByFileKey(fileKey);
+
+            return String(index + 1) + ". " + label;
           })
           .join("\n");
       }
