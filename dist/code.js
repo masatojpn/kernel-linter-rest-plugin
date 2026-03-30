@@ -835,6 +835,9 @@ function getTextSizeAndLineHeightVariableState(node) {
     };
 }
 function checkTextTypographyViolation(node) {
+    if (isLintIgnoreNode(node)) {
+        return null;
+    }
     var hasCharacters = node.characters.trim().length > 0;
     if (!hasCharacters) {
         return null;
@@ -1023,8 +1026,17 @@ async function lintSceneNodes(nodes, allowedKeys, allowedSignatures) {
         violations: unique
     };
 }
+function isLintIgnoreNode(node) {
+    return typeof node.name === "string" && node.name.startsWith("_lint_ignore");
+}
+function shouldIgnoreContainerSelf(node) {
+    return node.type === "COMPONENT_SET" || isLintIgnoreNode(node);
+}
 function checkCornerRadiusVariableViolation(node) {
     if (!shouldCheckNumericForNode(node)) {
+        return null;
+    }
+    if (shouldIgnoreContainerSelf(node)) {
         return null;
     }
     const anyNode = node;
@@ -1126,6 +1138,9 @@ function getBoundPaintAliases(node, field) {
     return aliases;
 }
 async function checkColorVariableViolations(node) {
+    if (shouldIgnoreContainerSelf(node)) {
+        return [];
+    }
     const violations = [];
     const anyNode = node;
     if (node.type !== "TEXT" &&
@@ -1227,8 +1242,16 @@ function hasBoundVariableAlias(value) {
     }
     return true;
 }
+function isAutoGapLayout(node) {
+    const anyNode = node;
+    return (isAutoLayoutNode(node) &&
+        anyNode.primaryAxisAlignItems === "SPACE_BETWEEN");
+}
 function shouldCheckAutoLayoutNumericField(node, field) {
     if (!isAutoLayoutNode(node)) {
+        return false;
+    }
+    if (field === "itemSpacing" && isAutoGapLayout(node)) {
         return false;
     }
     return shouldCheckNumericField(node, field);
@@ -1321,10 +1344,13 @@ function shouldCheckFixedWidth(node) {
     return true;
 }
 function shouldCheckNumericForNode(node) {
+    if (shouldIgnoreContainerSelf(node)) {
+        return false;
+    }
     return (node.type === "FRAME" ||
         node.type === "GROUP" ||
         node.type === "COMPONENT" ||
-        node.type === "COMPONENT_SET" ||
+        // node.type === "COMPONENT_SET" ||
         node.type === "INSTANCE" ||
         node.type === "SECTION");
 }
@@ -1440,6 +1466,9 @@ function isNearestInstanceAncestor(node, instance) {
     return false;
 }
 function checkRawTextRecommendation(node) {
+    if (isLintIgnoreNode(node)) {
+        return null;
+    }
     if (hasAncestorType(node, "INSTANCE")) {
         return null;
     }

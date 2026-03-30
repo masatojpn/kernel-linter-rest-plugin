@@ -102,55 +102,254 @@
       .source-item-label {
         line-height: 1.4;
       }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        padding: 12px;
+        overflow: hidden;
+      }
+
+      .app {
+        height: 100%;
+      }
+
+      .main {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+
+      .hero-actions {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+
+      .button-large {
+        min-height: 44px;
+      }
+
+      .button-secondary {
+        color: var(--figma-color-text);
+        background: var(--figma-color-bg-secondary);
+        border: 1px solid var(--figma-color-border);
+      }
+
+      .panel-compact {
+        padding: 12px;
+      }
+
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: body;
+        z-index: 10;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .modal.is-open {
+        opacity: 1;
+        pointer-events: all;
+      }
+
+      .modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgb(0 0 0 / 0.32);
+      }
+
+      .modal.is-open > .modal-backdrop {
+        opacity: 1;
+      }
+
+      .modal-dialog {
+        position: absolute;
+        inset: 12px;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        background: var(--figma-color-bg);
+        overflow: hidden;
+        transition: all 0.2s cubic-bezier(0.165, 0, 0, 1.65);
+        transform: scale(0.8);
+      }
+
+      .modal.is-open > .modal-dialog {
+        transform: scale(1);
+      }
+
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px;
+        border-bottom: 1px solid var(--figma-color-border);
+        background: var(--figma-color-bg-secondary);
+      }
+
+      .modal-title-wrap {
+        display: grid;
+        gap: 2px;
+      }
+
+      .modal-title {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .modal-subtitle {
+        font-size: 11px;
+        color: var(--figma-color-text-secondary);
+      }
+
+      .modal-body {
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+        overflow: auto;
+      }
+
+      .icon-button {
+        appearance: none;
+        width: 28px;
+        height: 28px;
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        background: var(--figma-color-bg);
+        color: var(--figma-color-text);
+        cursor: pointer;
+      }
+
+      .header {
+        position: absolute;
+      }
+
+      .header-inner {
+        display: flex;
+        width: 100%;
+      }
+      .wrapper {
+        padding-top: 32px;
+        overflow-y: scroll;
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <div class="field">
-        <button id="connectButton" class="button" type="button">Connect</button>
+  <div class="app">
+    <div class="main">
+      <div class="header">
+        <div class="header-inner">
+          <button id="runButton" type="button" class="button" style="width: 100%; display: block;">
+            <span style="width: 100%; display:block;">実行</span>
+          </button>
+          <button id="openSettingsButton" type="button" class="button" style="background: transparent; border: none; margin-left: auto;">
+            <span style="background: transparent;">
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M9.99994 5.99996C11.0608 5.99996 12.0779 6.42169 12.8281 7.17184C13.5782 7.92198 13.9999 8.9391 13.9999 9.99996C13.9999 11.0608 13.5782 12.0779 12.8281 12.8281C12.0779 13.5782 11.0608 14 9.99994 14C8.93907 14 7.92196 13.5782 7.17181 12.8281C6.42166 12.0779 5.99994 11.0608 5.99994 9.99996C5.99994 8.9391 6.42166 7.92198 7.17181 7.17184C7.92196 6.42169 8.93907 5.99996 9.99994 5.99996ZM9.99994 7.99996C9.4695 7.99996 8.96095 8.21083 8.58587 8.5859C8.2108 8.96097 7.99994 9.46953 7.99994 9.99996C7.99994 10.5304 8.2108 11.039 8.58587 11.414C8.96095 11.7891 9.4695 12 9.99994 12C10.5304 12 11.0389 11.7891 11.414 11.414C11.7891 11.039 11.9999 10.5304 11.9999 9.99996C11.9999 9.46953 11.7891 8.96097 11.414 8.5859C11.0389 8.21083 10.5304 7.99996 9.99994 7.99996Z" fill="white"/>
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M7.42572 1.82906C8.26998 -0.690979 11.9941 -0.606962 12.6464 2.08102C12.6733 2.19178 12.7266 2.29521 12.8007 2.3818C12.8748 2.46826 12.968 2.53645 13.0732 2.58004C13.1784 2.62362 13.2926 2.64154 13.4062 2.63277C13.5198 2.62395 13.6302 2.58859 13.7275 2.52926L13.957 2.40231C16.336 1.2176 18.9102 3.9104 17.4716 6.2734C17.4125 6.37055 17.3769 6.48033 17.3681 6.59371C17.3593 6.70727 17.3782 6.82148 17.4218 6.92672C17.4653 7.03177 17.5328 7.12515 17.6191 7.19918C17.7055 7.2732 17.8083 7.32654 17.9189 7.35348L18.1708 7.42574C20.6908 8.27004 20.6068 11.9941 17.9189 12.6464C17.8081 12.6733 17.7047 12.7266 17.6181 12.8007C17.5316 12.8748 17.4635 12.968 17.4199 13.0732C17.3763 13.1784 17.3584 13.2926 17.3671 13.4062C17.3737 13.4915 17.3951 13.575 17.4306 13.6523L17.4706 13.7275C18.9559 16.1657 16.1656 18.9565 13.7265 17.4716C13.6294 17.4125 13.5195 17.3769 13.4062 17.3681C13.2926 17.3593 13.1784 17.3783 13.0732 17.4218C12.9681 17.4654 12.8748 17.5328 12.8007 17.6191C12.7452 17.684 12.7014 17.7582 12.6718 17.8379L12.6464 17.9189C11.973 20.6935 8.02685 20.6935 7.35345 17.9189C7.32661 17.8081 7.27325 17.7047 7.19915 17.6181C7.1251 17.5317 7.03187 17.4635 6.92669 17.4199C6.82147 17.3763 6.70724 17.3584 6.59369 17.3671C6.50844 17.3738 6.42491 17.3952 6.34759 17.4306L6.2724 17.4707C3.83417 18.956 1.04328 16.1657 2.52826 13.7265L2.56829 13.6513C2.60355 13.5742 2.62517 13.4912 2.63177 13.4062C2.64056 13.2927 2.62162 13.1784 2.57806 13.0732C2.53454 12.9682 2.46709 12.8748 2.38079 12.8007C2.31596 12.7452 2.24164 12.7015 2.16204 12.6718L2.08099 12.6464C-0.693663 11.9731 -0.693663 8.02684 2.08099 7.35348C2.19175 7.32663 2.29518 7.27329 2.38177 7.19918C2.46825 7.12511 2.53642 7.03191 2.58001 6.92672C2.62361 6.82149 2.64151 6.70727 2.63275 6.59371C2.62614 6.50847 2.60471 6.42493 2.56927 6.34762L2.52923 6.27242C1.04413 3.83465 3.83258 1.04417 6.27142 2.52731C6.69334 2.78377 7.23725 2.55804 7.35345 2.08102L7.42572 1.82906ZM10.7031 2.5527C10.5242 1.81573 9.47563 1.81573 9.29681 2.5527C8.87432 4.28909 6.93784 5.14173 5.38275 4.32125L5.23333 4.23629C4.58452 3.84128 3.84272 4.58365 4.23724 5.23141C4.46041 5.59745 4.59368 6.01102 4.62689 6.43844C4.66003 6.86602 4.59182 7.29614 4.42767 7.69234C4.26358 8.08832 4.00815 8.43995 3.68255 8.71871C3.39735 8.96279 3.06487 9.14549 2.70697 9.25484L2.55267 9.29684C1.81571 9.47566 1.81571 10.5243 2.55267 10.7031C2.96883 10.8044 3.35627 11.0026 3.68158 11.2812C4.00695 11.56 4.26274 11.9117 4.42669 12.3076C4.59064 12.7035 4.65899 13.1332 4.62591 13.5605C4.59282 13.9878 4.45918 14.4016 4.23626 14.7675C3.84171 15.4163 4.58373 16.1571 5.23138 15.7627C5.59737 15.5396 6.01107 15.4062 6.43841 15.373C6.86598 15.3399 7.29612 15.4081 7.69232 15.5722C8.08828 15.7363 8.43994 15.9918 8.71869 16.3173C8.99747 16.6431 9.19581 17.0305 9.29681 17.4472L9.33978 17.5771C9.60313 18.1814 10.5354 18.138 10.7031 17.4472C10.8043 17.031 11.0025 16.6436 11.2812 16.3183C11.56 15.9929 11.9117 15.7372 12.3076 15.5732C12.7035 15.4093 13.1332 15.3409 13.5605 15.374C13.9877 15.4071 14.4015 15.5407 14.7675 15.7636C15.4162 16.1581 16.157 15.4161 15.7626 14.7685C15.5398 14.4027 15.4062 13.9885 15.373 13.5615C15.3398 13.1339 15.408 12.7038 15.5722 12.3076C15.7363 11.9116 15.9917 11.56 16.3173 11.2812C16.6431 11.0024 17.0305 10.8041 17.4472 10.7031L17.5771 10.6601C18.1814 10.3968 18.138 9.46451 17.4472 9.29684C17.031 9.19557 16.6436 8.99732 16.3183 8.71871C15.9929 8.43994 15.7371 8.0882 15.5732 7.69234C15.4092 7.29638 15.3409 6.86671 15.374 6.43941C15.407 6.01215 15.5407 5.59838 15.7636 5.23238C16.1581 4.58366 15.4161 3.84286 14.7685 4.23727L14.7675 4.23629C14.4016 4.45928 13.9887 4.59371 13.5615 4.62691C13.1339 4.66006 12.7038 4.59183 12.3076 4.4277C11.9116 4.26361 11.5599 4.00816 11.2812 3.68258C11.0371 3.39738 10.8544 3.0649 10.7451 2.70699L10.7031 2.5527Z" fill="white"/>
+              </svg>
+            </span>
+          </button>
+        </div>
       </div>
+      <div class="wrapper">
+        <div class="panel panel-compact">
+          <div class="label">Status</div>
+          <div id="status" class="status">待機中</div>
+        </div>
 
-      <div class="panel">
+        <div class="panel panel-compact">
+          <div class="label">Result</div>
+          <div id="result" class="result">結果なし</div>
+        </div>
+      </div>
+      <div class="status-bar">
         <div id="connectionStatus" class="status">Not connected</div>
       </div>
+    </div>
 
-      <button id="runButton" class="button" type="button">Run Lint</button>
-      <button id="setupPagesButton" class="button" type="button">
-        Setup Pages
-      </button>
-      <div class="panel">
-        <div class="label">Global Sources</div>
-        <div id="globalSources" class="result">なし</div>
-      </div>
+    <div id="settingsModal" class="modal" aria-hidden="true">
+      <div id="settingsBackdrop" class="modal-backdrop"></div>
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settingsTitle"
+      >
+        <div class="modal-header">
+          <div class="modal-title-wrap">
+            <div id="settingsTitle" class="modal-title">Settings</div>
+            <div class="modal-subtitle">Source / Connect / Setup</div>
+          </div>
 
-      <div class="panel">
-        <div class="label">Project Sources</div>
-        <div id="projectSources" class="result">なし</div>
-      </div>
+          <button
+            id="closeSettingsButton"
+            class="icon-button"
+            type="button"
+            aria-label="Close settings"
+          >
+            ×
+          </button>
+        </div>
 
-      <div class="panel">
-        <div class="label">Global Sourceを選択</div>
-        <div id="globalSourceCandidates" class="result">候補なし</div>
-      </div>
+        <div class="modal-body">
+          <div class="field">
+            <button id="connectButton" class="button" type="button">Figmaアカウントを接続</button>
+          </div>
+          <p>有効化済みライブラリを参照する場合は接続してください。</p>
 
-      <div class="panel">
-        <div class="label">Project Sourceを選択</div>
-        <div id="projectSourceCandidates" class="result">候補なし</div>
-      </div>
+          <button id="setupPagesButton" class="button button-secondary" type="button">
+            ページ生成
+          </button>
+          <p>
+            現在のファイルにプラグイン用ページを生成します。<br>
+            ※外部ライブラリを参照する場合は、ライブラリ側でページ生成を行なってください。
+          </p>
 
-      <button id="saveSourcesButton" class="button" type="button">
-        Save Sources
-      </button>
-      <div class="panel">
-        <div id="status" class="status">待機中</div>
-      </div>
+          <hr width="100%" height="1px">
 
-      <div class="panel">
-        <div id="result" class="result">結果なし</div>
+          <p>参照ライブラリ設定</p>
+          <div class="panel">
+            <div class="label">Global Sources</div>
+            <div id="globalSources" class="result">なし</div>
+          </div>
+
+          <div class="panel">
+            <div class="label">Project Sources</div>
+            <div id="projectSources" class="result">なし</div>
+          </div>
+
+          <div class="panel">
+            <div class="label">Global Sourceを選択</div>
+            <div id="globalSourceCandidates" class="result">候補なし</div>
+          </div>
+
+          <div class="panel">
+            <div class="label">Project Sourceを選択</div>
+            <div id="projectSourceCandidates" class="result">候補なし</div>
+          </div>
+
+          <button id="saveSourcesButton" class="button" type="button">
+            設定を保存
+          </button>
+        </div>
       </div>
     </div>
 
     <script>
+
+      const openSettingsButtonEl = document.getElementById("openSettingsButton");
+      const closeSettingsButtonEl = document.getElementById("closeSettingsButton");
+      const settingsModalEl = document.getElementById("settingsModal");
+      const settingsBackdropEl = document.getElementById("settingsBackdrop");
+
       const FIXED_SERVER_BASE_URL =
         "https://kernel-linter-rest-server.vercel.app";
       const globalSourcesEl = document.getElementById("globalSources");
@@ -181,6 +380,16 @@
       let currentCandidates = [];
       let sessionToken = "";
       let pluginAccess = null;
+
+      function openSettingsModal() {
+        settingsModalEl.classList.add("is-open");
+        settingsModalEl.setAttribute("aria-hidden", "false");
+      }
+
+      function closeSettingsModal() {
+        settingsModalEl.classList.remove("is-open");
+        settingsModalEl.setAttribute("aria-hidden", "true");
+      }
 
       function setStatus(message, isError) {
         statusEl.textContent = message;
@@ -790,6 +999,24 @@
           return;
         }
       };
+
+      openSettingsButtonEl.addEventListener("click", function () {
+        openSettingsModal();
+      });
+
+      closeSettingsButtonEl.addEventListener("click", function () {
+        closeSettingsModal();
+      });
+
+      settingsBackdropEl.addEventListener("click", function () {
+        closeSettingsModal();
+      });
+
+      window.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          closeSettingsModal();
+        }
+      });
 
       sendToPlugin({ type: "ui-ready" });
     </script>

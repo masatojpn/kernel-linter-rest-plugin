@@ -1269,6 +1269,11 @@ function getTextSizeAndLineHeightVariableState(node: TextNode): {
 }
 
 function checkTextTypographyViolation(node: TextNode): Violation | null {
+
+  if (isLintIgnoreNode(node)) {
+    return null;
+  }
+
   var hasCharacters = node.characters.trim().length > 0;
 
   if (!hasCharacters) {
@@ -1526,8 +1531,20 @@ async function lintSceneNodes(
   };
 }
 
+function isLintIgnoreNode(node: SceneNode): boolean {
+  return typeof node.name === "string" && node.name.startsWith("_lint_ignore");
+}
+
+function shouldIgnoreContainerSelf(node: SceneNode): boolean {
+  return node.type === "COMPONENT_SET" || isLintIgnoreNode(node);
+}
+
 function checkCornerRadiusVariableViolation(node: SceneNode): Violation | null {
   if (!shouldCheckNumericForNode(node)) {
+    return null;
+  }
+
+  if (shouldIgnoreContainerSelf(node)) {
     return null;
   }
 
@@ -1663,6 +1680,11 @@ function getBoundPaintAliases(
 async function checkColorVariableViolations(
   node: SceneNode
 ): Promise<Violation[]> {
+
+  if (shouldIgnoreContainerSelf(node)) {
+    return [];
+  }
+
   const violations: Violation[] = [];
   const anyNode = node as any;
 
@@ -1795,11 +1817,24 @@ function hasBoundVariableAlias(value: any): boolean {
   return true;
 }
 
+function isAutoGapLayout(node: SceneNode): boolean {
+  const anyNode = node as any;
+
+  return (
+    isAutoLayoutNode(node) &&
+    anyNode.primaryAxisAlignItems === "SPACE_BETWEEN"
+  );
+}
+
 function shouldCheckAutoLayoutNumericField(
   node: SceneNode,
   field: NumericField
 ): boolean {
   if (!isAutoLayoutNode(node)) {
+    return false;
+  }
+
+  if (field === "itemSpacing" && isAutoGapLayout(node)) {
     return false;
   }
 
@@ -1927,11 +1962,15 @@ function shouldCheckFixedWidth(node: SceneNode): boolean {
 }
 
 function shouldCheckNumericForNode(node: SceneNode): boolean {
+  if (shouldIgnoreContainerSelf(node)) {
+    return false;
+  }
+
   return (
     node.type === "FRAME" ||
     node.type === "GROUP" ||
     node.type === "COMPONENT" ||
-    node.type === "COMPONENT_SET" ||
+    // node.type === "COMPONENT_SET" ||
     node.type === "INSTANCE" ||
     node.type === "SECTION"
   );
@@ -2084,6 +2123,11 @@ function isNearestInstanceAncestor(
 }
 
 function checkRawTextRecommendation(node: TextNode): Violation | null {
+
+  if (isLintIgnoreNode(node)) {
+    return null;
+  }
+
   if (hasAncestorType(node, "INSTANCE")) {
     return null;
   }
