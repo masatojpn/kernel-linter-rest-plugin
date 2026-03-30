@@ -14,11 +14,13 @@ type IndexLibraryCandidate = {
 type LocalAllowedRegistry = {
   allowedKeys: Set<string>;
   allowedSignatures: Set<string>;
+  allowedVariantIdentities: Set<string>;
 };
 
 type RemoteAllowedRegistry = {
   allowedKeys: Set<string>;
   allowedSignatures: Set<string>;
+  allowedVariantIdentities: Set<string>;
 };
 
 function extractSlugAndField(variableName: string): {
@@ -77,29 +79,32 @@ async function getImportedStringVariableValueByKey(
   return rawValue.trim();
 }
 
+function hasAncestorTypeInList(
+  node: BaseNode,
+  types: NodeType[]
+): boolean {
+  var current = node.parent;
+
+  while (current) {
+    if (types.indexOf(current.type) >= 0) {
+      return true;
+    }
+
+    current = current.parent;
+  }
+
+  return false;
+}
+
 
 
 async function getKernelIndexCandidates(): Promise<IndexLibraryCandidate[]> {
   const collections =
     await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
 
-  console.log("[kernel-index] available collections", collections);
-
-  console.log(
-    "[kernel-index] available collections raw",
-    collections.map((c) => ({
-      name: c.name,
-      key: c.key,
-      libraryName: c.libraryName,
-    }))
-  );
-
-
   const targetCollections = collections.filter(function (collection) {
     return collection.name === "Kernel Index";
   });
-
-  console.log("[kernel-index] target collections", targetCollections);
 
   const grouped = new Map<
     string,
@@ -114,12 +119,6 @@ async function getKernelIndexCandidates(): Promise<IndexLibraryCandidate[]> {
       await figma.teamLibrary.getVariablesInLibraryCollectionAsync(
         collection.key
       );
-
-    console.log("[kernel-index] variables", {
-      collectionName: collection.name,
-      libraryName: collection.libraryName,
-      variables: variables
-    });
 
     for (const variable of variables) {
       const parsed = extractSlugAndField(variable.name);
@@ -171,8 +170,6 @@ async function getKernelIndexCandidates(): Promise<IndexLibraryCandidate[]> {
       fileKey: value.fileKey
     });
   }
-
-  console.log("[kernel-index] candidates", result);
 
   return result;
 }
@@ -277,6 +274,7 @@ type CodeToUIMessage =
 
 type ViolationType =
   | "RAW_TEXT"
+  | "RAW_COMPONENT"
   | "NOT_REGISTERED"
   | "FILL_NEEDS_VARIABLE"
   | "STROKE_NEEDS_VARIABLE"
@@ -321,20 +319,8 @@ type LintResult = {
   violations: Violation[];
 };
 
-// const STORAGE_KEY = "kernel-linter-rest-config";
-// const MARKER_NAME = "__kernel-linter-marker";
 const UI_WIDTH = 360;
 const UI_HEIGHT = 320;
-
-// (async function () {
-//   try {
-//     const candidates = await getKernelIndexCandidates();
-
-//     console.log("[kernel-index] candidates", candidates);
-//   } catch (error) {
-//     console.log("[kernel-index] failed", error);
-//   }
-// })();
 
 let cachedKernelIndexCandidates: IndexLibraryCandidate[] = [];
 let cachedKernelIndexFileKeys = new Set<string>();
@@ -429,7 +415,6 @@ async function boot(): Promise<void> {
 }
 
 figma.ui.onmessage = async function (msg: UIToCodeMessage) {
-  console.log("[code] ui.onmessage", msg);
   try {
     if (msg.type === "ui-ready") {
       var initConfig = await loadConfig();
@@ -482,12 +467,6 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
       var savedCandidatesForSources = await getKernelIndexCandidates();
       setCachedKernelIndexCandidates(savedCandidatesForSources);
 
-
-      console.log("[code] sources saved", {
-        globalSources: savedConfigForSources.globalSources,
-        projectSources: savedConfigForSources.projectSources
-      });
-
       postToUI({
         type: "init",
         config: savedConfigForSources,
@@ -504,17 +483,7 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
     }
 
     if (msg.type === "save-session-token") {
-      console.log("[code] save-session-token start", {
-        serverBaseUrl: msg.serverBaseUrl,
-        hasSessionToken: !!msg.sessionToken,
-        sessionTokenLength: msg.sessionToken ? msg.sessionToken.length : 0
-      });
-
       var currentConfigForSave = await loadConfig();
-      console.log("[code] current config before save", {
-        serverBaseUrl: currentConfigForSave.serverBaseUrl,
-        hasSessionToken: !!currentConfigForSave.sessionToken
-      });
 
       await saveConfig({
         serverBaseUrl: currentConfigForSave.serverBaseUrl,
@@ -526,11 +495,6 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
       var savedConfig = await loadConfig();
       var savedCandidates = await getKernelIndexCandidates();
       setCachedKernelIndexCandidates(savedCandidates);
-      console.log("[code] config after save", {
-        serverBaseUrl: savedConfig.serverBaseUrl,
-        hasSessionToken: !!savedConfig.sessionToken,
-        sessionTokenLength: savedConfig.sessionToken ? savedConfig.sessionToken.length : 0
-      });
 
       postToUI({
         type: "init",
@@ -569,24 +533,6 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
       var sources = sanitizedSourcesResult.activeSources;
       var skippedSources = sanitizedSourcesResult.skippedSources;
 
-      console.log("[code] run-lint start", {
-        inputServerBaseUrl: msg.serverBaseUrl,
-        normalizedServerBaseUrl: serverBaseUrl,
-        savedServerBaseUrl: currentConfig.serverBaseUrl,
-        hasSessionToken: !!sessionToken,
-        sessionTokenLength: sessionToken ? sessionToken.length : 0
-      });
-
-      console.log("[code] run-lint sources", {
-        globalSourceCount: currentConfig.globalSources.length,
-        projectSourceCount: currentConfig.projectSources.length,
-        mergedSourceCount: savedSources.length,
-        activeSourceCount: sources.length,
-        skippedSourceCount: skippedSources.length,
-        activeSources: sources,
-        skippedSources: skippedSources
-      });
-
       if (!serverBaseUrl) {
         throw new Error("Server Base URL を入力してください。");
       }
@@ -624,7 +570,8 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
           ? await fetchAllowedRegistry(serverBaseUrl, sessionToken, sources)
           : {
               allowedKeys: new Set<string>(),
-              allowedSignatures: new Set<string>()
+              allowedSignatures: new Set<string>(),
+              allowedVariantIdentities: new Set<string>()
             };
 
       var currentFileAllowedRegistry =
@@ -640,26 +587,11 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
         currentFileAllowedRegistry.allowedSignatures
       ]);
 
-      console.log("[code] allowedKeys detail", Array.from(allowedKeys));
-      console.log(
-        "[code] allowedSignatures detail",
-        Array.from(allowedSignatures)
-      );
+      var allowedVariantIdentities = mergeAllowedKeySets([
+        remoteAllowedRegistry.allowedVariantIdentities,
+        currentFileAllowedRegistry.allowedVariantIdentities
+      ]);
 
-      console.log("[code] allowed registry merged", {
-        serverAllowedKeys: Array.from(remoteAllowedRegistry.allowedKeys),
-        serverAllowedSignatures: Array.from(
-          remoteAllowedRegistry.allowedSignatures
-        ),
-        currentFileAllowedKeys: Array.from(
-          currentFileAllowedRegistry.allowedKeys
-        ),
-        currentFileAllowedSignatures: Array.from(
-          currentFileAllowedRegistry.allowedSignatures
-        ),
-        allowedKeys: Array.from(allowedKeys),
-        allowedSignatures: Array.from(allowedSignatures)
-      });
       postToUI({
         type: "status",
         message:
@@ -692,7 +624,7 @@ figma.ui.onmessage = async function (msg: UIToCodeMessage) {
           " 件"
       });
 
-      var result = await lintSceneNodes(lintTargets, allowedKeys, allowedSignatures);
+      var result = await lintSceneNodes(lintTargets, allowedKeys, allowedSignatures, allowedVariantIdentities);
 
       if (figma.currentPage.name === TEST_PAGE_NAME) {
         if (result.invalidCount > 0) {
@@ -968,9 +900,13 @@ async function fetchAllowedRegistry(
   var allowedSignaturesRaw = Array.isArray(json.allowedSignatures)
     ? json.allowedSignatures
     : [];
+  var allowedVariantIdentitiesRaw = Array.isArray(json.allowedVariantIdentities)
+    ? json.allowedVariantIdentities
+    : [];
 
   var allowedKeys = new Set<string>();
   var allowedSignatures = new Set<string>();
+  var allowedVariantIdentities = new Set<string>();
   var i: number;
 
   for (i = 0; i < allowedKeysRaw.length; i += 1) {
@@ -993,9 +929,20 @@ async function fetchAllowedRegistry(
     allowedSignatures.add(signature);
   }
 
+  for (i = 0; i < allowedVariantIdentitiesRaw.length; i += 1) {
+    var variantIdentity = String(allowedVariantIdentitiesRaw[i]).trim();
+
+    if (!variantIdentity) {
+      continue;
+    }
+
+    allowedVariantIdentities.add(variantIdentity);
+  }
+
   return {
     allowedKeys: allowedKeys,
-    allowedSignatures: allowedSignatures
+    allowedSignatures: allowedSignatures,
+    allowedVariantIdentities: allowedVariantIdentities
   };
 }
 
@@ -1014,6 +961,7 @@ function addAllowedKeyVariants(target: Set<string>, key: string): void {
 async function collectCurrentFileAllowedRegistry(): Promise<LocalAllowedRegistry> {
   var allowedKeys = new Set<string>();
   var allowedSignatures = new Set<string>();
+  var allowedVariantIdentities = new Set<string>();
 
   await figma.loadAllPagesAsync();
 
@@ -1049,6 +997,7 @@ async function collectCurrentFileAllowedRegistry(): Promise<LocalAllowedRegistry
       if (node.type === "COMPONENT") {
         var componentCandidates = toAllowedKeyCandidatesFromComponent(node);
         var componentSignature = toLegacySignatureFromComponent(node);
+        var componentVariantIdentity = buildAllowedVariantIdentityFromComponent(node);
         var k: number;
 
         for (k = 0; k < componentCandidates.length; k += 1) {
@@ -1059,12 +1008,18 @@ async function collectCurrentFileAllowedRegistry(): Promise<LocalAllowedRegistry
           allowedSignatures.add(componentSignature);
         }
 
+        if (componentVariantIdentity) {
+          allowedVariantIdentities.add(componentVariantIdentity);
+        }
+
         continue;
       }
 
       if (node.type === "INSTANCE") {
         var instanceCandidates = await toAllowedKeyCandidatesFromInstance(node);
         var instanceSignature = await toLegacySignatureFromInstance(node);
+        var instanceVariantIdentity =
+          await buildAllowedVariantIdentityFromInstance(node);
         var m: number;
 
         for (m = 0; m < instanceCandidates.length; m += 1) {
@@ -1074,13 +1029,18 @@ async function collectCurrentFileAllowedRegistry(): Promise<LocalAllowedRegistry
         if (instanceSignature) {
           allowedSignatures.add(instanceSignature);
         }
+
+        if (instanceVariantIdentity) {
+          allowedVariantIdentities.add(instanceVariantIdentity);
+        }
       }
     }
   }
 
   return {
     allowedKeys: allowedKeys,
-    allowedSignatures: allowedSignatures
+    allowedSignatures: allowedSignatures,
+    allowedVariantIdentities: allowedVariantIdentities
   };
 }
 
@@ -1307,15 +1267,6 @@ function checkTextTypographyViolation(node: TextNode): Violation | null {
     return null;
   }
 
-  console.log("[code] typography missing", {
-    nodeId: node.id,
-    nodeName: node.name,
-    characters: node.characters,
-    textStyleId: node.textStyleId,
-    typographyState: typographyState,
-    nodeBoundVariables: (node as any).boundVariables
-  });
-
   return {
     type: "TEXT_TYPOGRAPHY_VARIABLE_MISSING",
     node: node,
@@ -1424,7 +1375,8 @@ function hasMatchingTextFamilyWeightContext(node: TextNode): boolean {
 async function lintSceneNodes(
   nodes: SceneNode[],
   allowedKeys: Set<string>,
-  allowedSignatures: Set<string>
+  allowedSignatures: Set<string>,
+  allowedVariantIdentities: Set<string>
 ): Promise<LintResult> {
   await figma.loadFontAsync(LABEL_FONT);
 
@@ -1446,7 +1398,7 @@ async function lintSceneNodes(
     }
 
     if (node.type === "TEXT") {
-      if (!hasAncestorType(node, "INSTANCE")) {
+      if (!hasAncestorTypeInList(node, ["INSTANCE", "COMPONENT"])) {
         var rawTextRecommendation = checkRawTextRecommendation(node);
 
         if (rawTextRecommendation) {
@@ -1461,34 +1413,44 @@ async function lintSceneNodes(
       }
     }
 
+    if (node.type === "COMPONENT") {
+      var rawComponentRecommendation = checkRawComponentRecommendation(node);
+
+      if (rawComponentRecommendation) {
+        violations.push(rawComponentRecommendation);
+      }
+    }
+
     if (node.type === "INSTANCE") {
       const instanceNode = node;
 
       totalInstances += 1;
 
-      var keyCandidates = await toAllowedKeyCandidatesFromInstance(instanceNode);
-      var keyMatched = hasAnyAllowedKey(allowedKeys, keyCandidates);
+      var mainComponent = await instanceNode.getMainComponentAsync();
+      var keyCandidates: string[] = [];
+      var keyMatched = false;
+      var variantIdentity = "";
+      var variantMatched = false;
+      var isVariantInstance = false;
 
-      var signature = await toLegacySignatureFromInstance(instanceNode);
-      var signatureMatched = false;
+      if (mainComponent) {
+        keyCandidates = toAllowedKeyCandidatesFromComponent(mainComponent);
+        keyMatched = hasAnyAllowedKey(allowedKeys, keyCandidates);
 
-      if (signature && allowedSignatures.has(signature)) {
-        signatureMatched = true;
+        variantIdentity = buildAllowedVariantIdentityFromComponent(mainComponent);
+        variantMatched =
+          variantIdentity !== "" &&
+          allowedVariantIdentities.has(variantIdentity);
+
+        isVariantInstance =
+          !!mainComponent.parent &&
+          mainComponent.parent.type === "COMPONENT_SET" &&
+          buildVariantSignature(mainComponent) !== "";
       }
 
-      var isAllowed = keyMatched || signatureMatched;
-
-      if (instanceNode.name === "Text") {
-        console.log("[code] text instance check", {
-          nodeId: instanceNode.id,
-          nodeName: instanceNode.name,
-          keyCandidates: keyCandidates,
-          signature: signature,
-          keyMatched: keyMatched,
-          signatureMatched: signatureMatched,
-          hasAllowed: isAllowed
-        });
-      }
+      var isAllowed = isVariantInstance
+        ? keyMatched || variantMatched
+        : keyMatched;
 
       if (!isAllowed) {
         violations.push({
@@ -1982,7 +1944,6 @@ function shouldCheckNumericForNode(node: SceneNode): boolean {
     node.type === "FRAME" ||
     node.type === "GROUP" ||
     node.type === "COMPONENT" ||
-    // node.type === "COMPONENT_SET" ||
     node.type === "INSTANCE" ||
     node.type === "SECTION"
   );
@@ -2134,13 +2095,36 @@ function isNearestInstanceAncestor(
   return false;
 }
 
-function checkRawTextRecommendation(node: TextNode): Violation | null {
-
+function checkRawComponentRecommendation(node: ComponentNode): Violation | null {
   if (isLintIgnoreNode(node)) {
     return null;
   }
 
-  if (hasAncestorType(node, "INSTANCE")) {
+  if (
+    figma.currentPage.name === TEST_PAGE_NAME ||
+    figma.currentPage.name === ALLOWED_PAGE_NAME
+  ) {
+    return null;
+  }
+
+  if (hasAncestorTypeInList(node, ["COMPONENT_SET"])) {
+    return null;
+  }
+
+  return {
+    type: "RAW_COMPONENT",
+    node: node,
+    message: "RAW COMPONENT SHOULD BE INSTANCE",
+    severity: "warning"
+  };
+}
+
+function checkRawTextRecommendation(node: TextNode): Violation | null {
+  if (isLintIgnoreNode(node)) {
+    return null;
+  }
+
+  if (hasAncestorTypeInList(node, ["INSTANCE", "COMPONENT"])) {
     return null;
   }
 
@@ -2207,7 +2191,7 @@ function getRenderableBounds(node: SceneNode): Rect | null {
 }
 
 function getViolationColor(type: ViolationType): RGB {
-  if (type === "RAW_TEXT") {
+  if (type === "RAW_TEXT" || type === "RAW_COMPONENT") {
     return { r: 1, g: 0.231, b: 0.188 };
   }
 
@@ -2374,6 +2358,37 @@ function buildVariantSignature(component: ComponentNode): string {
   }
 
   return "::" + parts.join("|");
+}
+
+function buildAllowedVariantIdentityFromComponent(
+  component: ComponentNode
+): string {
+  var parent = component.parent;
+  var variantSignature = buildVariantSignature(component);
+
+  if (!variantSignature) {
+    return "";
+  }
+
+  if (parent && parent.type === "COMPONENT_SET") {
+    var componentSetKey = parent.key ? parent.key : parent.id;
+    return "VARIANT:" + componentSetKey + variantSignature;
+  }
+
+  var componentKey = component.key ? component.key : component.id;
+  return "VARIANT_COMPONENT:" + componentKey + variantSignature;
+}
+
+async function buildAllowedVariantIdentityFromInstance(
+  instance: InstanceNode
+): Promise<string> {
+  var mainComponent = await instance.getMainComponentAsync();
+
+  if (!mainComponent) {
+    return "";
+  }
+
+  return buildAllowedVariantIdentityFromComponent(mainComponent);
 }
 
 function toLegacySignatureFromComponent(component: ComponentNode): string {

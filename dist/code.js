@@ -40,26 +40,24 @@ async function getImportedStringVariableValueByKey(variableKey) {
     }
     return rawValue.trim();
 }
+function hasAncestorTypeInList(node, types) {
+    var current = node.parent;
+    while (current) {
+        if (types.indexOf(current.type) >= 0) {
+            return true;
+        }
+        current = current.parent;
+    }
+    return false;
+}
 async function getKernelIndexCandidates() {
     const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
-    console.log("[kernel-index] available collections", collections);
-    console.log("[kernel-index] available collections raw", collections.map((c) => ({
-        name: c.name,
-        key: c.key,
-        libraryName: c.libraryName,
-    })));
     const targetCollections = collections.filter(function (collection) {
         return collection.name === "Kernel Index";
     });
-    console.log("[kernel-index] target collections", targetCollections);
     const grouped = new Map();
     for (const collection of targetCollections) {
         const variables = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(collection.key);
-        console.log("[kernel-index] variables", {
-            collectionName: collection.name,
-            libraryName: collection.libraryName,
-            variables: variables
-        });
         for (const variable of variables) {
             const parsed = extractSlugAndField(variable.name);
             if (!parsed) {
@@ -98,7 +96,6 @@ async function getKernelIndexCandidates() {
             fileKey: value.fileKey
         });
     }
-    console.log("[kernel-index] candidates", result);
     return result;
 }
 async function sanitizeSourcesForRunLint(sources) {
@@ -127,18 +124,8 @@ async function sanitizeSourcesForRunLint(sources) {
         skippedSources
     };
 }
-// const STORAGE_KEY = "kernel-linter-rest-config";
-// const MARKER_NAME = "__kernel-linter-marker";
 const UI_WIDTH = 360;
 const UI_HEIGHT = 320;
-// (async function () {
-//   try {
-//     const candidates = await getKernelIndexCandidates();
-//     console.log("[kernel-index] candidates", candidates);
-//   } catch (error) {
-//     console.log("[kernel-index] failed", error);
-//   }
-// })();
 let cachedKernelIndexCandidates = [];
 let cachedKernelIndexFileKeys = new Set();
 figma.showUI(__html__, {
@@ -206,7 +193,6 @@ async function boot() {
     });
 }
 figma.ui.onmessage = async function (msg) {
-    console.log("[code] ui.onmessage", msg);
     try {
         if (msg.type === "ui-ready") {
             var initConfig = await loadConfig();
@@ -249,10 +235,6 @@ figma.ui.onmessage = async function (msg) {
             var savedConfigForSources = await loadConfig();
             var savedCandidatesForSources = await getKernelIndexCandidates();
             setCachedKernelIndexCandidates(savedCandidatesForSources);
-            console.log("[code] sources saved", {
-                globalSources: savedConfigForSources.globalSources,
-                projectSources: savedConfigForSources.projectSources
-            });
             postToUI({
                 type: "init",
                 config: savedConfigForSources,
@@ -266,16 +248,7 @@ figma.ui.onmessage = async function (msg) {
             return;
         }
         if (msg.type === "save-session-token") {
-            console.log("[code] save-session-token start", {
-                serverBaseUrl: msg.serverBaseUrl,
-                hasSessionToken: !!msg.sessionToken,
-                sessionTokenLength: msg.sessionToken ? msg.sessionToken.length : 0
-            });
             var currentConfigForSave = await loadConfig();
-            console.log("[code] current config before save", {
-                serverBaseUrl: currentConfigForSave.serverBaseUrl,
-                hasSessionToken: !!currentConfigForSave.sessionToken
-            });
             await saveConfig({
                 serverBaseUrl: currentConfigForSave.serverBaseUrl,
                 sessionToken: msg.sessionToken,
@@ -285,11 +258,6 @@ figma.ui.onmessage = async function (msg) {
             var savedConfig = await loadConfig();
             var savedCandidates = await getKernelIndexCandidates();
             setCachedKernelIndexCandidates(savedCandidates);
-            console.log("[code] config after save", {
-                serverBaseUrl: savedConfig.serverBaseUrl,
-                hasSessionToken: !!savedConfig.sessionToken,
-                sessionTokenLength: savedConfig.sessionToken ? savedConfig.sessionToken.length : 0
-            });
             postToUI({
                 type: "init",
                 config: savedConfig,
@@ -315,22 +283,6 @@ figma.ui.onmessage = async function (msg) {
             var sanitizedSourcesResult = await sanitizeSourcesForRunLint(savedSources);
             var sources = sanitizedSourcesResult.activeSources;
             var skippedSources = sanitizedSourcesResult.skippedSources;
-            console.log("[code] run-lint start", {
-                inputServerBaseUrl: msg.serverBaseUrl,
-                normalizedServerBaseUrl: serverBaseUrl,
-                savedServerBaseUrl: currentConfig.serverBaseUrl,
-                hasSessionToken: !!sessionToken,
-                sessionTokenLength: sessionToken ? sessionToken.length : 0
-            });
-            console.log("[code] run-lint sources", {
-                globalSourceCount: currentConfig.globalSources.length,
-                projectSourceCount: currentConfig.projectSources.length,
-                mergedSourceCount: savedSources.length,
-                activeSourceCount: sources.length,
-                skippedSourceCount: skippedSources.length,
-                activeSources: sources,
-                skippedSources: skippedSources
-            });
             if (!serverBaseUrl) {
                 throw new Error("Server Base URL を入力してください。");
             }
@@ -360,7 +312,8 @@ figma.ui.onmessage = async function (msg) {
                 ? await fetchAllowedRegistry(serverBaseUrl, sessionToken, sources)
                 : {
                     allowedKeys: new Set(),
-                    allowedSignatures: new Set()
+                    allowedSignatures: new Set(),
+                    allowedVariantIdentities: new Set()
                 };
             var currentFileAllowedRegistry = await collectCurrentFileAllowedRegistry();
             var allowedKeys = mergeAllowedKeySets([
@@ -371,16 +324,10 @@ figma.ui.onmessage = async function (msg) {
                 remoteAllowedRegistry.allowedSignatures,
                 currentFileAllowedRegistry.allowedSignatures
             ]);
-            console.log("[code] allowedKeys detail", Array.from(allowedKeys));
-            console.log("[code] allowedSignatures detail", Array.from(allowedSignatures));
-            console.log("[code] allowed registry merged", {
-                serverAllowedKeys: Array.from(remoteAllowedRegistry.allowedKeys),
-                serverAllowedSignatures: Array.from(remoteAllowedRegistry.allowedSignatures),
-                currentFileAllowedKeys: Array.from(currentFileAllowedRegistry.allowedKeys),
-                currentFileAllowedSignatures: Array.from(currentFileAllowedRegistry.allowedSignatures),
-                allowedKeys: Array.from(allowedKeys),
-                allowedSignatures: Array.from(allowedSignatures)
-            });
+            var allowedVariantIdentities = mergeAllowedKeySets([
+                remoteAllowedRegistry.allowedVariantIdentities,
+                currentFileAllowedRegistry.allowedVariantIdentities
+            ]);
             postToUI({
                 type: "status",
                 message: "allowedKeys: " +
@@ -408,7 +355,7 @@ figma.ui.onmessage = async function (msg) {
                     String(lintTargets.length) +
                     " 件"
             });
-            var result = await lintSceneNodes(lintTargets, allowedKeys, allowedSignatures);
+            var result = await lintSceneNodes(lintTargets, allowedKeys, allowedSignatures, allowedVariantIdentities);
             if (figma.currentPage.name === TEST_PAGE_NAME) {
                 if (result.invalidCount > 0) {
                     postToUI({
@@ -609,8 +556,12 @@ async function fetchAllowedRegistry(serverBaseUrl, sessionToken, sources) {
     var allowedSignaturesRaw = Array.isArray(json.allowedSignatures)
         ? json.allowedSignatures
         : [];
+    var allowedVariantIdentitiesRaw = Array.isArray(json.allowedVariantIdentities)
+        ? json.allowedVariantIdentities
+        : [];
     var allowedKeys = new Set();
     var allowedSignatures = new Set();
+    var allowedVariantIdentities = new Set();
     var i;
     for (i = 0; i < allowedKeysRaw.length; i += 1) {
         var key = String(allowedKeysRaw[i]).trim();
@@ -626,9 +577,17 @@ async function fetchAllowedRegistry(serverBaseUrl, sessionToken, sources) {
         }
         allowedSignatures.add(signature);
     }
+    for (i = 0; i < allowedVariantIdentitiesRaw.length; i += 1) {
+        var variantIdentity = String(allowedVariantIdentitiesRaw[i]).trim();
+        if (!variantIdentity) {
+            continue;
+        }
+        allowedVariantIdentities.add(variantIdentity);
+    }
     return {
         allowedKeys: allowedKeys,
-        allowedSignatures: allowedSignatures
+        allowedSignatures: allowedSignatures,
+        allowedVariantIdentities: allowedVariantIdentities
     };
 }
 function addAllowedKeyVariants(target, key) {
@@ -643,6 +602,7 @@ function addAllowedKeyVariants(target, key) {
 async function collectCurrentFileAllowedRegistry() {
     var allowedKeys = new Set();
     var allowedSignatures = new Set();
+    var allowedVariantIdentities = new Set();
     await figma.loadAllPagesAsync();
     for (var i = 0; i < figma.root.children.length; i += 1) {
         var page = figma.root.children[i];
@@ -668,6 +628,7 @@ async function collectCurrentFileAllowedRegistry() {
             if (node.type === "COMPONENT") {
                 var componentCandidates = toAllowedKeyCandidatesFromComponent(node);
                 var componentSignature = toLegacySignatureFromComponent(node);
+                var componentVariantIdentity = buildAllowedVariantIdentityFromComponent(node);
                 var k;
                 for (k = 0; k < componentCandidates.length; k += 1) {
                     allowedKeys.add(componentCandidates[k]);
@@ -675,11 +636,15 @@ async function collectCurrentFileAllowedRegistry() {
                 if (componentSignature) {
                     allowedSignatures.add(componentSignature);
                 }
+                if (componentVariantIdentity) {
+                    allowedVariantIdentities.add(componentVariantIdentity);
+                }
                 continue;
             }
             if (node.type === "INSTANCE") {
                 var instanceCandidates = await toAllowedKeyCandidatesFromInstance(node);
                 var instanceSignature = await toLegacySignatureFromInstance(node);
+                var instanceVariantIdentity = await buildAllowedVariantIdentityFromInstance(node);
                 var m;
                 for (m = 0; m < instanceCandidates.length; m += 1) {
                     allowedKeys.add(instanceCandidates[m]);
@@ -687,12 +652,16 @@ async function collectCurrentFileAllowedRegistry() {
                 if (instanceSignature) {
                     allowedSignatures.add(instanceSignature);
                 }
+                if (instanceVariantIdentity) {
+                    allowedVariantIdentities.add(instanceVariantIdentity);
+                }
             }
         }
     }
     return {
         allowedKeys: allowedKeys,
-        allowedSignatures: allowedSignatures
+        allowedSignatures: allowedSignatures,
+        allowedVariantIdentities: allowedVariantIdentities
     };
 }
 function mergeAllowedKeySets(sets) {
@@ -856,14 +825,6 @@ function checkTextTypographyViolation(node) {
     if (hasRequiredTypographyVariables) {
         return null;
     }
-    console.log("[code] typography missing", {
-        nodeId: node.id,
-        nodeName: node.name,
-        characters: node.characters,
-        textStyleId: node.textStyleId,
-        typographyState: typographyState,
-        nodeBoundVariables: node.boundVariables
-    });
     return {
         type: "TEXT_TYPOGRAPHY_VARIABLE_MISSING",
         node: node,
@@ -940,7 +901,7 @@ function hasMatchingTextFamilyWeightContext(node) {
     }
     return familyContext === weightContext;
 }
-async function lintSceneNodes(nodes, allowedKeys, allowedSignatures) {
+async function lintSceneNodes(nodes, allowedKeys, allowedSignatures, allowedVariantIdentities) {
     await figma.loadFontAsync(LABEL_FONT);
     clearExistingMarkers(figma.currentPage);
     var totalInstances = 0;
@@ -955,7 +916,7 @@ async function lintSceneNodes(nodes, allowedKeys, allowedSignatures) {
             continue;
         }
         if (node.type === "TEXT") {
-            if (!hasAncestorType(node, "INSTANCE")) {
+            if (!hasAncestorTypeInList(node, ["INSTANCE", "COMPONENT"])) {
                 var rawTextRecommendation = checkRawTextRecommendation(node);
                 if (rawTextRecommendation) {
                     violations.push(rawTextRecommendation);
@@ -966,28 +927,36 @@ async function lintSceneNodes(nodes, allowedKeys, allowedSignatures) {
                 }
             }
         }
+        if (node.type === "COMPONENT") {
+            var rawComponentRecommendation = checkRawComponentRecommendation(node);
+            if (rawComponentRecommendation) {
+                violations.push(rawComponentRecommendation);
+            }
+        }
         if (node.type === "INSTANCE") {
             const instanceNode = node;
             totalInstances += 1;
-            var keyCandidates = await toAllowedKeyCandidatesFromInstance(instanceNode);
-            var keyMatched = hasAnyAllowedKey(allowedKeys, keyCandidates);
-            var signature = await toLegacySignatureFromInstance(instanceNode);
-            var signatureMatched = false;
-            if (signature && allowedSignatures.has(signature)) {
-                signatureMatched = true;
+            var mainComponent = await instanceNode.getMainComponentAsync();
+            var keyCandidates = [];
+            var keyMatched = false;
+            var variantIdentity = "";
+            var variantMatched = false;
+            var isVariantInstance = false;
+            if (mainComponent) {
+                keyCandidates = toAllowedKeyCandidatesFromComponent(mainComponent);
+                keyMatched = hasAnyAllowedKey(allowedKeys, keyCandidates);
+                variantIdentity = buildAllowedVariantIdentityFromComponent(mainComponent);
+                variantMatched =
+                    variantIdentity !== "" &&
+                        allowedVariantIdentities.has(variantIdentity);
+                isVariantInstance =
+                    !!mainComponent.parent &&
+                        mainComponent.parent.type === "COMPONENT_SET" &&
+                        buildVariantSignature(mainComponent) !== "";
             }
-            var isAllowed = keyMatched || signatureMatched;
-            if (instanceNode.name === "Text") {
-                console.log("[code] text instance check", {
-                    nodeId: instanceNode.id,
-                    nodeName: instanceNode.name,
-                    keyCandidates: keyCandidates,
-                    signature: signature,
-                    keyMatched: keyMatched,
-                    signatureMatched: signatureMatched,
-                    hasAllowed: isAllowed
-                });
-            }
+            var isAllowed = isVariantInstance
+                ? keyMatched || variantMatched
+                : keyMatched;
             if (!isAllowed) {
                 violations.push({
                     type: "NOT_REGISTERED",
@@ -1355,7 +1324,6 @@ function shouldCheckNumericForNode(node) {
     return (node.type === "FRAME" ||
         node.type === "GROUP" ||
         node.type === "COMPONENT" ||
-        // node.type === "COMPONENT_SET" ||
         node.type === "INSTANCE" ||
         node.type === "SECTION");
 }
@@ -1470,11 +1438,29 @@ function isNearestInstanceAncestor(node, instance) {
     }
     return false;
 }
+function checkRawComponentRecommendation(node) {
+    if (isLintIgnoreNode(node)) {
+        return null;
+    }
+    if (figma.currentPage.name === TEST_PAGE_NAME ||
+        figma.currentPage.name === ALLOWED_PAGE_NAME) {
+        return null;
+    }
+    if (hasAncestorTypeInList(node, ["COMPONENT_SET"])) {
+        return null;
+    }
+    return {
+        type: "RAW_COMPONENT",
+        node: node,
+        message: "RAW COMPONENT SHOULD BE INSTANCE",
+        severity: "warning"
+    };
+}
 function checkRawTextRecommendation(node) {
     if (isLintIgnoreNode(node)) {
         return null;
     }
-    if (hasAncestorType(node, "INSTANCE")) {
+    if (hasAncestorTypeInList(node, ["INSTANCE", "COMPONENT"])) {
         return null;
     }
     var hasCharacters = node.characters.trim().length > 0;
@@ -1524,7 +1510,7 @@ function getRenderableBounds(node) {
     return null;
 }
 function getViolationColor(type) {
-    if (type === "RAW_TEXT") {
+    if (type === "RAW_TEXT" || type === "RAW_COMPONENT") {
         return { r: 1, g: 0.231, b: 0.188 };
     }
     if (type === "NOT_REGISTERED") {
@@ -1647,6 +1633,26 @@ function buildVariantSignature(component) {
         parts.push(key + "=" + String(variantProperties[key]));
     }
     return "::" + parts.join("|");
+}
+function buildAllowedVariantIdentityFromComponent(component) {
+    var parent = component.parent;
+    var variantSignature = buildVariantSignature(component);
+    if (!variantSignature) {
+        return "";
+    }
+    if (parent && parent.type === "COMPONENT_SET") {
+        var componentSetKey = parent.key ? parent.key : parent.id;
+        return "VARIANT:" + componentSetKey + variantSignature;
+    }
+    var componentKey = component.key ? component.key : component.id;
+    return "VARIANT_COMPONENT:" + componentKey + variantSignature;
+}
+async function buildAllowedVariantIdentityFromInstance(instance) {
+    var mainComponent = await instance.getMainComponentAsync();
+    if (!mainComponent) {
+        return "";
+    }
+    return buildAllowedVariantIdentityFromComponent(mainComponent);
 }
 function toLegacySignatureFromComponent(component) {
     var parent = component.parent;
