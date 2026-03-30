@@ -77,11 +77,23 @@ async function getImportedStringVariableValueByKey(
   return rawValue.trim();
 }
 
+
+
 async function getKernelIndexCandidates(): Promise<IndexLibraryCandidate[]> {
   const collections =
     await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
 
   console.log("[kernel-index] available collections", collections);
+
+  console.log(
+    "[kernel-index] available collections raw",
+    collections.map((c) => ({
+      name: c.name,
+      key: c.key,
+      libraryName: c.libraryName,
+    }))
+  );
+
 
   const targetCollections = collections.filter(function (collection) {
     return collection.name === "Kernel Index";
