@@ -2545,6 +2545,7 @@ async function promoteNodesToAllowedPage(
     skippedCount: skippedCount
   };
 }
+
 async function collectExistingPromoteNodes(
   page: PageNode
 ): Promise<Map<string, SceneNode>> {
