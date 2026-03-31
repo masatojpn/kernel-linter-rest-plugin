@@ -4,7 +4,9 @@
     "teamlibrary",
     "UNALLOWED",
     "Renderable",
-    "Inspectable"
+    "Inspectable",
+    "evenodd",
+    "labelledby"
   ],
   "ignorePaths": [
     ".cSpell.json",
